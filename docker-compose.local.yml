@@ -1,0 +1,17 @@
+name: mcp_agent_gateway_local
+
+services:
+  fastapi:
+    build:
+      context: .
+      dockerfile: ./compose/local/fastapi/Dockerfile
+    image: mcp_agent_gateway_local_fastapi
+    container_name: mcp_agent_gateway_local_fastapi
+    volumes:
+      - .:/app:z
+    env_file:
+      - path: ./.env
+        required: false
+    ports:
+      - "8000:8000"
+    command: /start

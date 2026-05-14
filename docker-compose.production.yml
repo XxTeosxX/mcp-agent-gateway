@@ -1,0 +1,17 @@
+# Update .env.production before deploying — set POSTGRES_PASSWORD, SECRET_KEY, etc.
+name: mcp_agent_gateway_production
+
+services:
+  fastapi:
+    build:
+      context: .
+      dockerfile: ./compose/production/fastapi/Dockerfile
+    image: mcp_agent_gateway_production_fastapi
+    container_name: mcp_agent_gateway_production_fastapi
+    restart: unless-stopped
+    env_file:
+      - path: ./.env.production
+        required: false
+    ports:
+      - "8000:8000"
+    command: /start

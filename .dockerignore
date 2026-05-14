@@ -1,0 +1,25 @@
+# Git
+.git
+.gitignore
+
+# Python
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.egg-info
+.pytest_cache
+.ruff_cache
+.mypy_cache
+
+# Env files (keep example)
+.env
+.env.*
+!.env.example
+
+# Editors / OS
+.vscode
+.idea
+.DS_Store
+
