@@ -21,3 +21,7 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+
+# Test artifacts
+.coverage
+test-api.sh
