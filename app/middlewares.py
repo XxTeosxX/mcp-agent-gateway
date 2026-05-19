@@ -12,7 +12,14 @@ from app.config import settings
 
 logger = logging.getLogger("app.request")
 
-_AUTH_BYPASS_PREFIXES = ("/health", "/.well-known", "/docs", "/openapi.json", "/oauth/authorize")
+_AUTH_BYPASS_PREFIXES = (
+    "/health",
+    "/.well-known",
+    "/docs",
+    "/openapi.json",
+    "/oauth/authorize",
+    "/auth/google/callback",
+)
 
 
 class AuthMiddleware(BaseHTTPMiddleware):

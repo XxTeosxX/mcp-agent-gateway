@@ -21,6 +21,11 @@ class Settings(BaseSettings):
 
     REDIS_URL: str = "redis://localhost:6379"
 
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
+    GOOGLE_TOKEN_ENCRYPTION_KEY: str = ""
+    GOOGLE_REDIRECT_URI: str = "http://localhost:8000/auth/google/callback"
+
     DCR_REGISTRATION_ENDPOINT: str = ""
     DCR_INITIAL_ACCESS_TOKEN: str = ""
     CLIENT_REGISTRY_TTL: int = 86400
