@@ -48,7 +48,7 @@ def make_token(key, **overrides) -> str:
 
 @pytest.fixture(scope="session", autouse=True)
 def mock_token_validator(rsa_key):
-    with patch("app.auth.TokenValidator.validate", _make_validator(rsa_key)):
+    with patch("app.identity.token_validator.TokenValidator.validate", _make_validator(rsa_key)):
         yield
 
 

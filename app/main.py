@@ -2,11 +2,14 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from app.authorization.router import router as authorization_router
 from app.config import settings
+from app.gateway.health import router as health_router
+from app.gateway.mcp import mcp_app, mcp_lifespan
+from app.gateway.middleware.access_guard import AccessGuard
+from app.gateway.middleware.request_logger import request_logging_middleware
+from app.identity.protected_resource import router as identity_router
 from app.logging import configure_logging
-from app.middlewares import AuthMiddleware, request_logging_middleware
-from app.routers import auth, google, health, oauth
-from app.routers.mcp import mcp_app, mcp_lifespan
 
 configure_logging()
 
@@ -26,11 +29,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-app.add_middleware(AuthMiddleware)
+app.add_middleware(AccessGuard)
 app.middleware("http")(request_logging_middleware)
-app.include_router(health.router)
-app.include_router(auth.router)
-app.include_router(oauth.router)
-app.include_router(google.router)
+app.include_router(health_router)
+app.include_router(identity_router)
+app.include_router(authorization_router)
 
 app.add_route("/mcp/", mcp_app)
