@@ -13,22 +13,27 @@ class Settings(BaseSettings):
     VERSION: str = "0.1.0"
     DEBUG: bool = False
 
+    REDIS_URL: str = ""
+    CLIENT_REGISTRY_TTL: int = 86400
+
     OAUTH_ISSUER_URL: str = "http://localhost:8080/realms/mcp-gateway"
     OAUTH_EXPECTED_AUDIENCE: str = "http://localhost:8000/mcp/"
     OAUTH_JWKS_CACHE_TTL: int = 3600
 
     GATEWAY_BASE_URL: str = "http://localhost:8000"
 
-    REDIS_URL: str = "redis://localhost:6379"
-
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
     GOOGLE_TOKEN_ENCRYPTION_KEY: str = ""
     GOOGLE_REDIRECT_URI: str = "http://localhost:8000/auth/google/callback"
 
+    GOOGLE_DRIVE_TIMEOUT: float = 10.0
+    GOOGLE_DRIVE_MAX_CONNECTIONS: int = 100
+    GOOGLE_DRIVE_MAX_KEEPALIVE: int = 20
+    GOOGLE_DRIVE_MAX_RETRIES: int = 3
+
     DCR_REGISTRATION_ENDPOINT: str = ""
     DCR_INITIAL_ACCESS_TOKEN: str = ""
-    CLIENT_REGISTRY_TTL: int = 86400
 
 
 settings = Settings()

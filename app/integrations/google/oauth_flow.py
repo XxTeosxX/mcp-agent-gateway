@@ -6,11 +6,12 @@ import os
 import httpx
 
 from app.config import settings
+from app.integrations.google.constants import (
+    GOOGLE_AUTH_URL,
+    STATE_TTL,
+)
 from app.integrations.google.token_store import persist_tokens
-
-_GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
-_GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
-_STATE_TTL = 600
+from app.shared.store import Store
 
 
 class OAuthStateError(Exception):
@@ -24,14 +25,14 @@ def _generate_pkce() -> tuple[str, str]:
     return verifier, challenge
 
 
-async def build_authorization_url(user_id: str, redis) -> tuple[str, str]:
+async def build_authorization_url(user_id: str, store: Store) -> tuple[str, str]:
     code_verifier, code_challenge = _generate_pkce()
     state = os.urandom(16).hex()
 
-    await redis.set(
-        f"google:state:{state}",
+    await store.set(
+        state,
         json.dumps({"user_id": user_id, "code_verifier": code_verifier}),
-        ex=_STATE_TTL,
+        ttl=STATE_TTL,
     )
 
     params = {
@@ -45,12 +46,18 @@ async def build_authorization_url(user_id: str, redis) -> tuple[str, str]:
         "access_type": "offline",
         "prompt": "consent",
     }
-    url = httpx.URL(_GOOGLE_AUTH_URL).copy_with(params=params)
+    url = httpx.URL(GOOGLE_AUTH_URL).copy_with(params=params)
     return str(url), state
 
 
-async def handle_callback(state: str, code: str, redis, http_client: httpx.AsyncClient) -> str:
-    raw = await redis.getdel(f"google:state:{state}")
+async def handle_callback(
+    state: str,
+    code: str,
+    http_client: httpx.AsyncClient,
+    state_store: Store,
+    token_store: Store,
+) -> str:
+    raw = await state_store.pop(state)
     if raw is None:
         raise OAuthStateError("State not found or expired")
 
@@ -59,7 +66,7 @@ async def handle_callback(state: str, code: str, redis, http_client: httpx.Async
     code_verifier: str = data["code_verifier"]
 
     resp = await http_client.post(
-        _GOOGLE_TOKEN_URL,
+        "https://oauth2.googleapis.com/token",
         data={
             "grant_type": "authorization_code",
             "code": code,
@@ -76,5 +83,5 @@ async def handle_callback(state: str, code: str, redis, http_client: httpx.Async
     if not refresh_token:
         raise OAuthStateError("Google did not return a refresh_token — ensure access_type=offline and prompt=consent")
 
-    await persist_tokens(user_id, tokens, redis)
+    await persist_tokens(user_id, tokens, token_store)
     return user_id

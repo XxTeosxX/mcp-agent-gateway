@@ -3,7 +3,10 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
 from app.config import settings
+from app.gateway.context import current_user_id
 from app.identity.token_validator import token_validator
+
+_SCOPES = "mcp:tools:read mcp:tools:write"
 
 _AUTH_BYPASS_EXACT = frozenset(
     {
@@ -32,27 +35,27 @@ class AccessGuard(BaseHTTPMiddleware):
 
         auth_header = request.headers.get("Authorization", "")
         if not auth_header.lower().startswith("bearer "):
-            return self._unauthorized(request)
+            return self._unauthorized()
 
         token = auth_header[7:]
         try:
             claims = token_validator.validate(token)
         except ValueError:
-            return self._unauthorized(request)
+            return self._unauthorized()
 
         request.state.user = {
             "id": claims["sub"],
             "scopes": claims.get("scope", "").split(),
             "token": claims,
         }
+        current_user_id.set(claims["sub"])
         return await call_next(request)
 
     @staticmethod
-    def _unauthorized(request: Request) -> JSONResponse:
+    def _unauthorized() -> JSONResponse:
         resource_base = settings.OAUTH_EXPECTED_AUDIENCE.rstrip("/").rsplit("/", 1)[0]
         well_known = f"{resource_base}/.well-known/oauth-protected-resource"
-        scopes = "mcp:tools:read mcp:tools:write"
-        www_auth = f'Bearer resource_metadata="{well_known}", scope="{scopes}"'
+        www_auth = f'Bearer resource_metadata="{well_known}", scope="{_SCOPES}"'
         return JSONResponse(
             status_code=401,
             content={"detail": "Unauthorized"},

@@ -1,12 +1,7 @@
-import redis.asyncio as aioredis
-
-from app.config import settings
-
-_redis: aioredis.Redis | None = None
+from redis.asyncio import Redis, from_url
 
 
-def get_redis() -> aioredis.Redis:
-    global _redis
-    if _redis is None:
-        _redis = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
-    return _redis
+async def get_redis(url: str) -> Redis:
+    client: Redis = from_url(url, encoding="utf-8", decode_responses=True)
+    await client.ping()
+    return client

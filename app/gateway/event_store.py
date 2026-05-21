@@ -1,5 +1,5 @@
 import logging
-from collections import deque
+from collections import OrderedDict, deque
 from dataclasses import dataclass
 from uuid import uuid4
 
@@ -16,12 +16,13 @@ class EventEntry:
     message: JSONRPCMessage | None
 
 
+_MAX_STREAMS = 10_000
+
+
 class InMemoryEventStore(EventStore):
     def __init__(self, max_events_per_stream: int = 100):
         self.max_events_per_stream = max_events_per_stream
-
-        self.streams: dict[StreamId, deque[EventEntry]] = {}
-
+        self.streams: OrderedDict[StreamId, deque[EventEntry]] = OrderedDict()
         self.event_index: dict[EventId, EventEntry] = {}
 
     async def store_event(self, stream_id: StreamId, message: JSONRPCMessage | None) -> EventId:
@@ -29,6 +30,10 @@ class InMemoryEventStore(EventStore):
         event_entry = EventEntry(event_id=event_id, stream_id=stream_id, message=message)
 
         if stream_id not in self.streams:
+            if len(self.streams) >= _MAX_STREAMS:
+                _, evicted_deque = self.streams.popitem(last=False)
+                for entry in evicted_deque:
+                    self.event_index.pop(entry.event_id, None)
             self.streams[stream_id] = deque(maxlen=self.max_events_per_stream)
 
         if len(self.streams[stream_id]) == self.max_events_per_stream:

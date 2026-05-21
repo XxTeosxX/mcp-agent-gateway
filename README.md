@@ -156,6 +156,12 @@ Celery is sync-first and adds a separate broker. Redis Streams reuses infrastruc
 **Token bucket vs sliding window rate limiting**
 Token bucket has predictable burst behavior and constant memory per user. Sliding window is more accurate but requires storing per-request timestamps in Redis.
 
+**`HttpClient` class + FastAPI `Depends` vs module-level singleton**
+`shared/http_client.py` exposes a class (`HttpClient`) rather than a bare `_client` global. The instance is created in the FastAPI lifespan, stored in `app.state`, and injected into endpoints via `Depends(get_http_client)`. No `global` keyword, no module-level state. In tests, `app.dependency_overrides[get_http_client]` replaces the real client without patching internals.
+
+**`DriveClient` class with lazy `.get()` in handlers vs closure/partial injection**
+`drive_client` follows the same class pattern but lives in the MCP layer, which has no `Request` object and therefore no FastAPI DI. Handlers call `drive_client.get()` at call time (lazy) rather than receiving the client at construction. This keeps the registry a plain `dict` built at import time and avoids coupling handler construction to the lifespan order.
+
 ## Security
 
 - **Confused Deputy**: downstream and upstream OAuth flows are fully isolated. The client's JWT is never forwarded to Google, Slack, or HubSpot.
@@ -173,6 +179,28 @@ docker compose -f docker-compose.local.yml up -d
 # Run the gateway
 uv run fastapi dev app/main.py
 ```
+
+## Known gaps
+
+**`OAuthRefreshError` not handled in Drive tool handlers** (`gateway/tools/drive_tools.py`)
+
+`_get_drive_token()` only catches `OAuthTokenNotFoundError` (user never authorized). If the user's Google refresh token is revoked — e.g. they removed the app from their Google account — `get_valid_google_token` raises `OAuthRefreshError`, which propagates out of the handler as an unhandled exception and surfaces to the LLM as a 500 instead of a clean error message.
+
+Fix: catch `OAuthRefreshError` in `_get_drive_token()` alongside `OAuthTokenNotFoundError`:
+
+```python
+async def _get_drive_token() -> str | types.CallToolResult:
+    try:
+        return await get_valid_google_token(current_user_id.get(), _redis_client.get(), _drive_client.get())
+    except OAuthTokenNotFoundError:
+        return _error(_NOT_AUTHORIZED)
+    except OAuthRefreshError:
+        return _error("Google access was revoked. Call POST /auth/google/initiate to re-authorize.")
+```
+
+The same gap would appear in any future provider that implements a refresh flow.
+
+---
 
 ## What I'd do next with more time
 

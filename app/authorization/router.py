@@ -2,7 +2,7 @@ import logging
 from urllib.parse import urlparse
 
 import httpx
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from app.config import settings
@@ -14,8 +14,13 @@ from app.identity.client_registration.models import (
 )
 from app.identity.client_registration.registrar import DcrRegistrationError, enroll_mcp_client
 from app.integrations.google.oauth_flow import OAuthStateError, build_authorization_url, handle_callback
-from app.shared.http_client import get_http_client
-from app.shared.redis import get_redis
+from app.shared.dependencies import (
+    get_client_registry,
+    get_http_client,
+    get_oauth_state_store,
+    get_token_store,
+)
+from app.shared.store import Store
 
 logger = logging.getLogger(__name__)
 
@@ -55,21 +60,23 @@ async def oauth_authorization_server_metadata() -> JSONResponse:
 
 
 @router.get("/oauth/authorize")
-async def authorize(request: Request) -> RedirectResponse:
+async def authorize(
+    request: Request,
+    registry: Store = Depends(get_client_registry),
+) -> RedirectResponse:
     params = dict(request.query_params)
     client_id = params.get("client_id", "")
     redirect_uri = params.get("redirect_uri", "")
 
     if _is_url(client_id):
-        redis = get_redis()
         try:
-            cached = await client_repository.get(client_id, redis=redis)
+            cached = await client_repository.get(client_id, registry)
             if cached is None:
                 metadata = await fetch_client_metadata(client_id, allow_http=settings.DEBUG)
                 if redirect_uri not in metadata.redirect_uris:
                     return _error_redirect(redirect_uri, "invalid_request", "redirect_uri_not_in_metadata")
                 registered = await enroll_mcp_client(metadata)
-                await client_repository.set(client_id, registered, redis=redis)
+                await client_repository.set(client_id, registered, registry)
                 cached = registered
             params["client_id"] = cached.client_id
         except ClientMetadataFetchError:
@@ -86,16 +93,25 @@ async def authorize(request: Request) -> RedirectResponse:
 
 
 @router.post("/auth/google/initiate")
-async def google_initiate(request: Request) -> JSONResponse:
+async def google_initiate(
+    request: Request,
+    state_store: Store = Depends(get_oauth_state_store),
+) -> JSONResponse:
     user_id: str = request.state.user["id"]
-    authorization_url, state = await build_authorization_url(user_id, get_redis())
+    authorization_url, state = await build_authorization_url(user_id, state_store)
     return JSONResponse({"authorization_url": authorization_url, "state": state})
 
 
 @router.get("/auth/google/callback")
-async def google_callback(state: str, code: str) -> JSONResponse:
+async def google_callback(
+    state: str,
+    code: str,
+    client: httpx.AsyncClient = Depends(get_http_client),
+    state_store: Store = Depends(get_oauth_state_store),
+    token_store: Store = Depends(get_token_store),
+) -> JSONResponse:
     try:
-        await handle_callback(state, code, get_redis(), get_http_client())
+        await handle_callback(state, code, client, state_store, token_store)
     except OAuthStateError:
         return JSONResponse(status_code=400, content={"detail": "Invalid or expired state"})
     except Exception:

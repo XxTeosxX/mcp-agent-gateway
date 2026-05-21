@@ -10,14 +10,32 @@ from app.gateway.middleware.access_guard import AccessGuard
 from app.gateway.middleware.request_logger import request_logging_middleware
 from app.identity.protected_resource import router as identity_router
 from app.logging import configure_logging
+from app.shared.http_client import HttpClient
+from app.shared.redis import get_redis
+from app.shared.store import RedisStore
 
 configure_logging()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    async with mcp_lifespan():
+    if not settings.REDIS_URL:
+        raise RuntimeError("REDIS_URL is required")
+
+    redis = await get_redis(settings.REDIS_URL)
+    app.state.redis = redis
+    app.state.oauth_state_store = RedisStore(redis, "state:")
+    app.state.client_registry = RedisStore(redis, "client:")
+
+    client = HttpClient()
+    client.init()
+    app.state.http_client = client
+
+    async with mcp_lifespan(redis):
         yield
+
+    await client.close()
+    await redis.aclose()
 
 
 app = FastAPI(

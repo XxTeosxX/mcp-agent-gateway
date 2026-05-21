@@ -1,6 +1,7 @@
 import os
 
 os.environ.setdefault("OTEL_SDK_DISABLED", "true")
+os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 
 import time
 from unittest.mock import patch
@@ -8,6 +9,7 @@ from unittest.mock import patch
 import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
+from fakeredis.aioredis import FakeRedis
 from fastapi.testclient import TestClient
 
 from app.config import settings
@@ -53,5 +55,21 @@ def mock_token_validator(rsa_key):
 
 
 @pytest.fixture
-def client() -> TestClient:
-    return TestClient(app)
+def _fake_redis():
+    return FakeRedis(decode_responses=True)
+
+
+@pytest.fixture(autouse=True)
+def patch_get_redis(_fake_redis):
+    async def _get_redis(_url):
+        await _fake_redis.ping()
+        return _fake_redis
+
+    with patch("app.main.get_redis", _get_redis):
+        yield
+
+
+@pytest.fixture
+def client():
+    with TestClient(app) as c:
+        yield c

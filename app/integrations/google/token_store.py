@@ -5,8 +5,12 @@ import httpx
 from cryptography.fernet import Fernet
 
 from app.config import settings
+from app.integrations.google.constants import GOOGLE_TOKEN_URL
+from app.shared.store import Store
 
-_GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+
+def _fernet() -> Fernet:
+    return Fernet(settings.GOOGLE_TOKEN_ENCRYPTION_KEY.encode())
 
 
 class OAuthTokenNotFoundError(Exception):
@@ -17,16 +21,12 @@ class OAuthRefreshError(Exception):
     pass
 
 
-def _fernet() -> Fernet:
-    return Fernet(settings.GOOGLE_TOKEN_ENCRYPTION_KEY.encode())
-
-
-async def persist_tokens(user_id: str, tokens: dict, redis) -> None:
+async def persist_tokens(user_id: str, tokens: dict, store: Store) -> None:
     refresh_token = tokens["refresh_token"]
     refresh_token_enc = _fernet().encrypt(refresh_token.encode()).decode()
     expires_at = time.time() + tokens.get("expires_in", 3600)
-    await redis.set(
-        f"google:token:{user_id}",
+    await store.set(
+        user_id,
         json.dumps(
             {
                 "access_token": tokens["access_token"],
@@ -37,8 +37,8 @@ async def persist_tokens(user_id: str, tokens: dict, redis) -> None:
     )
 
 
-async def get_valid_google_token(user_id: str, redis, http_client: httpx.AsyncClient) -> str:
-    raw = await redis.get(f"google:token:{user_id}")
+async def get_valid_google_token(user_id: str, http_client: httpx.AsyncClient, store: Store) -> str:
+    raw = await store.get(user_id)
     if raw is None:
         raise OAuthTokenNotFoundError("User has not authorized Google")
 
@@ -49,7 +49,7 @@ async def get_valid_google_token(user_id: str, redis, http_client: httpx.AsyncCl
 
     refresh_token = _fernet().decrypt(data["refresh_token_enc"].encode()).decode()
     resp = await http_client.post(
-        _GOOGLE_TOKEN_URL,
+        GOOGLE_TOKEN_URL,
         data={
             "grant_type": "refresh_token",
             "refresh_token": refresh_token,
@@ -70,6 +70,6 @@ async def get_valid_google_token(user_id: str, redis, http_client: httpx.AsyncCl
 
     data["access_token"] = tokens["access_token"]
     data["expires_at"] = time.time() + tokens.get("expires_in", 3600)
-    await redis.set(f"google:token:{user_id}", json.dumps(data))
+    await store.set(user_id, json.dumps(data))
 
     return data["access_token"]

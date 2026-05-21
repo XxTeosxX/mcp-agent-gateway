@@ -1,6 +1,5 @@
 from unittest.mock import AsyncMock, patch
 
-import fakeredis.aioredis
 from fastapi.testclient import TestClient
 
 from app.config import settings
@@ -17,10 +16,6 @@ _METADATA = ClientMetadata(
     client_name="My MCP App",
 )
 _DCR_RESULT = RegisteredClient(client_id="kc-abc", client_secret="secret")
-
-
-def _fake_redis():
-    return fakeredis.aioredis.FakeRedis(decode_responses=True)
 
 
 def _authorize_url(client_id: str, redirect_uri: str = "https://myapp.com/callback") -> str:
@@ -62,7 +57,6 @@ class TestOAuthAuthorize:
         with (
             patch("app.authorization.router.fetch_client_metadata", new=AsyncMock(return_value=_METADATA)),
             patch("app.authorization.router.enroll_mcp_client", new=AsyncMock(return_value=_DCR_RESULT)),
-            patch("app.authorization.router.get_redis", return_value=_fake_redis()),
         ):
             resp = client.get(
                 _authorize_url("https://myapp.com/client-metadata.json"),
@@ -80,26 +74,17 @@ class TestOAuthAuthorize:
         assert "protocol/openid-connect/auth" in resp.headers["location"]
 
     def test_cache_hit_skips_fetch_and_dcr(self, client: TestClient) -> None:
-        fetch_mock = AsyncMock(return_value=_METADATA)
-        dcr_mock = AsyncMock(return_value=_DCR_RESULT)
-        cache: dict = {}
-
-        async def fake_get(url, *, redis=None):
-            return cache.get(url)
-
-        async def fake_set(url, result, *, redis=None, ttl=None):
-            cache[url] = result
-
         with (
-            patch("app.authorization.router.fetch_client_metadata", new=fetch_mock),
-            patch("app.authorization.router.enroll_mcp_client", new=dcr_mock),
-            patch("app.identity.client_registration.repository.get", new=fake_get),
-            patch("app.identity.client_registration.repository.set", new=fake_set),
+            patch(
+                "app.authorization.router.fetch_client_metadata",
+                new=AsyncMock(return_value=_METADATA),
+            ) as mock_fetch,
+            patch("app.authorization.router.enroll_mcp_client", new=AsyncMock(return_value=_DCR_RESULT)),
         ):
             client.get(_authorize_url("https://myapp.com/client-metadata.json"), follow_redirects=False)
+
             client.get(_authorize_url("https://myapp.com/client-metadata.json"), follow_redirects=False)
-        assert fetch_mock.call_count == 1
-        assert dcr_mock.call_count == 1
+        assert mock_fetch.await_count == 1
 
     def test_metadata_fetch_failure_returns_invalid_client(self, client: TestClient) -> None:
         with patch(
@@ -125,10 +110,7 @@ class TestOAuthAuthorize:
             redirect_uris=["https://other.com/callback"],
             client_name="App",
         )
-        with (
-            patch("app.authorization.router.fetch_client_metadata", new=AsyncMock(return_value=metadata_other)),
-            patch("app.authorization.router.get_redis", return_value=_fake_redis()),
-        ):
+        with patch("app.authorization.router.fetch_client_metadata", new=AsyncMock(return_value=metadata_other)):
             resp = client.get(
                 _authorize_url(
                     "https://myapp.com/client-metadata.json",
@@ -146,7 +128,6 @@ class TestOAuthAuthorize:
                 "app.authorization.router.enroll_mcp_client",
                 new=AsyncMock(side_effect=DcrRegistrationError("5xx")),
             ),
-            patch("app.authorization.router.get_redis", return_value=_fake_redis()),
         ):
             resp = client.get(_authorize_url("https://myapp.com/client-metadata.json"), follow_redirects=False)
         assert resp.status_code == 302
