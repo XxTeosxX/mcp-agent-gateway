@@ -7,6 +7,7 @@ from app.config import settings
 from app.gateway.health import router as health_router
 from app.gateway.mcp import mcp_app, mcp_lifespan
 from app.gateway.middleware.access_guard import AccessGuard
+from app.gateway.middleware.rate_limiter import RateLimiterMiddleware
 from app.gateway.middleware.request_logger import request_logging_middleware
 from app.identity.protected_resource import router as identity_router
 from app.logging import configure_logging
@@ -47,6 +48,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.add_middleware(RateLimiterMiddleware)
 app.add_middleware(AccessGuard)
 app.middleware("http")(request_logging_middleware)
 app.include_router(health_router)

@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     REDIS_URL: str = ""
     CLIENT_REGISTRY_TTL: int = 86400
 
+    RATE_LIMIT_ENABLED: bool = True
+    RATE_LIMIT_MAX_REQUESTS: int = 100
+    RATE_LIMIT_WINDOW_SECONDS: int = 60
+
     OAUTH_ISSUER_URL: str = "http://localhost:8080/realms/mcp-gateway"
     OAUTH_EXPECTED_AUDIENCE: str = "http://localhost:8000/mcp/"
     OAUTH_JWKS_CACHE_TTL: int = 3600
