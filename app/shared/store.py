@@ -77,3 +77,5 @@ class StoreHolder:
 
 
 token_store = StoreHolder()
+
+slack_token_store = StoreHolder()

@@ -45,11 +45,14 @@ class TestHandleListTools:
         tool_names = {t.name for t in tools}
         assert "health-check" not in tool_names
 
-    async def test_all_tools_are_readonly(self) -> None:
+    async def test_tool_readonly_hints_match_tool_nature(self) -> None:
+
+        write_tools = {"slack-send-message"}
         tools = await handle_list_tools()
         for tool in tools:
             assert isinstance(tool, types.Tool)
-            assert tool.annotations.readOnlyHint is True
+            expected = tool.name not in write_tools
+            assert tool.annotations.readOnlyHint is expected, tool.name
 
 
 class TestMCPIntegration:

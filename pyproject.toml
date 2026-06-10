@@ -41,6 +41,9 @@ line-length = 120
 select = ["E", "F", "I", "N", "W", "UP"]
 ignore = ["N999"]
 
+[tool.ruff.lint.isort]
+combine-as-imports = true
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]

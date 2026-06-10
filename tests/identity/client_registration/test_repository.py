@@ -1,8 +1,7 @@
 import pytest
 
 from app.identity.client_registration.models import RegisteredClient
-from app.identity.client_registration.repository import get
-from app.identity.client_registration.repository import set as registry_set
+from app.identity.client_registration.repository import get, set as registry_set
 from app.shared.store import InMemoryStore
 
 _RESULT = RegisteredClient(client_id="kc-abc", client_secret="secret-xyz")

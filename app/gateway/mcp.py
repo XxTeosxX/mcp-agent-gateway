@@ -6,7 +6,8 @@ from starlette.types import Receive, Scope, Send
 
 from app.gateway.server import create_session_manager
 from app.integrations.google.drive_client import drive_client
-from app.shared.store import RedisStore, token_store
+from app.integrations.slack.slack_client import slack_client
+from app.shared.store import RedisStore, slack_token_store, token_store
 
 
 class MCPApp:
@@ -29,7 +30,10 @@ async def mcp_lifespan(redis) -> AsyncIterator[None]:
     manager = create_session_manager()
     mcp_app.set_manager(manager)
     drive_client.init()
+    slack_client.init()
     token_store.init(RedisStore(redis, "token:"))
+    slack_token_store.init(RedisStore(redis, "slack:token:"))
     async with manager.run():
         yield
     await drive_client.close()
+    await slack_client.close()

@@ -32,6 +32,14 @@ class Settings(BaseSettings):
     GOOGLE_DRIVE_MAX_KEEPALIVE: int = 20
     GOOGLE_DRIVE_MAX_RETRIES: int = 3
 
+    SLACK_CLIENT_ID: str = ""
+    SLACK_CLIENT_SECRET: str = ""
+    SLACK_TOKEN_ENCRYPTION_KEY: str = ""
+    SLACK_REDIRECT_URI: str = "http://localhost:8000/auth/slack/callback"
+
+    SLACK_TIMEOUT: float = 8.0
+    SLACK_MAX_RETRIES: int = 3
+
     DCR_REGISTRATION_ENDPOINT: str = ""
     DCR_INITIAL_ACCESS_TOKEN: str = ""
 
