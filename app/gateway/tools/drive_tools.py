@@ -6,6 +6,7 @@ from mcp import types
 from pydantic import BaseModel, Field, ValidationError
 
 from app.gateway.context import current_user_id
+from app.gateway.usage import track_usage
 from app.integrations.google.drive_client import drive_client as _drive_client
 from app.integrations.google.token_store import OAuthTokenNotFoundError, get_valid_google_token
 from app.shared.store import token_store
@@ -75,6 +76,7 @@ async def _get_drive_token() -> str | types.CallToolResult:
         return _error(_NOT_AUTHORIZED)
 
 
+@track_usage("drive-search-files")
 async def handle_drive_search_files(arguments: dict) -> types.CallToolResult:
     try:
         args = DriveSearchInput(**arguments)
@@ -89,6 +91,7 @@ async def handle_drive_search_files(arguments: dict) -> types.CallToolResult:
     return _ok([_to_drive_file(f) for f in files])
 
 
+@track_usage("drive-get-file-content")
 async def handle_drive_get_file_content(arguments: dict) -> types.CallToolResult:
     try:
         args = DriveGetFileInput(**arguments)
@@ -103,6 +106,7 @@ async def handle_drive_get_file_content(arguments: dict) -> types.CallToolResult
     return _ok(DriveFileContent(**file_data).model_dump())
 
 
+@track_usage("drive-list-recent")
 async def handle_drive_list_recent(arguments: dict) -> types.CallToolResult:
     try:
         args = DriveListRecentInput(**arguments)

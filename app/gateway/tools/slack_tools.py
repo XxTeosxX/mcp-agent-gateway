@@ -6,6 +6,7 @@ from mcp import types
 from pydantic import BaseModel, Field, ValidationError
 
 from app.gateway.context import current_user_id
+from app.gateway.usage import track_usage
 from app.integrations.slack.slack_client import SlackAPIError, slack_client as _slack_client
 from app.integrations.slack.token_store import SlackTokenNotFoundError, get_valid_slack_token
 from app.shared.store import slack_token_store
@@ -71,6 +72,7 @@ async def _get_slack_token(token_type: str) -> str | types.CallToolResult:
         return _error(_NOT_AUTHORIZED)
 
 
+@track_usage("slack-send-message")
 async def handle_slack_send_message(arguments: dict) -> types.CallToolResult:
     try:
         args = SlackSendInput(**arguments)
@@ -88,6 +90,7 @@ async def handle_slack_send_message(arguments: dict) -> types.CallToolResult:
     return _ok(SlackSendResult(**result).model_dump())
 
 
+@track_usage("slack-search-messages")
 async def handle_slack_search_messages(arguments: dict) -> types.CallToolResult:
     try:
         args = SlackSearchInput(**arguments)

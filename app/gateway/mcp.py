@@ -5,6 +5,7 @@ from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from starlette.types import Receive, Scope, Send
 
 from app.gateway.server import create_session_manager
+from app.gateway.usage import usage_recorder
 from app.integrations.google.drive_client import drive_client
 from app.integrations.slack.slack_client import slack_client
 from app.shared.store import RedisStore, slack_token_store, token_store
@@ -33,6 +34,7 @@ async def mcp_lifespan(redis) -> AsyncIterator[None]:
     slack_client.init()
     token_store.init(RedisStore(redis, "token:"))
     slack_token_store.init(RedisStore(redis, "slack:token:"))
+    usage_recorder.init(redis)
     async with manager.run():
         yield
     await drive_client.close()
