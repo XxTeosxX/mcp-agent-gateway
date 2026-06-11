@@ -105,6 +105,19 @@ class DriveClient:
 
         return await _call()
 
+    async def export_file(self, token: str, file_id: str, export_mime: str) -> bytes:
+        @_retryable()
+        async def _call() -> bytes:
+            resp = await self.get().get(
+                f"/drive/v3/files/{file_id}/export",
+                headers=self._auth(token),
+                params={"mimeType": export_mime},
+            )
+            resp.raise_for_status()
+            return resp.content
+
+        return await _call()
+
     async def list_recent(self, token: str, days: int, max_results: int) -> list[dict]:
         @_retryable()
         async def _call() -> list[dict]:

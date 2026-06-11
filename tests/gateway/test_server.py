@@ -47,7 +47,7 @@ class TestHandleListTools:
 
     async def test_tool_readonly_hints_match_tool_nature(self) -> None:
 
-        write_tools = {"slack-send-message"}
+        write_tools = {"slack-send-message", "drive-export-large-file"}
         tools = await handle_list_tools()
         for tool in tools:
             assert isinstance(tool, types.Tool)

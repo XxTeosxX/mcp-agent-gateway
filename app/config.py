@@ -44,6 +44,8 @@ class Settings(BaseSettings):
     SLACK_TIMEOUT: float = 8.0
     SLACK_MAX_RETRIES: int = 3
 
+    EXPORT_DIR: str = "/tmp/exports"
+
     DCR_REGISTRATION_ENDPOINT: str = ""
     DCR_INITIAL_ACCESS_TOKEN: str = ""
 

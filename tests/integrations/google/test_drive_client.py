@@ -158,3 +158,26 @@ async def test_search_files_does_not_retry_on_401():
 
     assert exc_info.value.response.status_code == 401
     assert respx.calls.call_count == 1
+
+
+async def test_export_file_returns_bytes():
+    import httpx
+    import respx
+
+    from app.integrations.google.drive_client import DriveClient
+
+    client = DriveClient()
+    client.init()
+    try:
+        with respx.mock:
+            route = respx.get("https://www.googleapis.com/drive/v3/files/file-1/export").mock(
+                return_value=httpx.Response(200, content=b"%PDF-1.7 fake bytes")
+            )
+
+            data = await client.export_file("tok", "file-1", "application/pdf")
+
+        assert data == b"%PDF-1.7 fake bytes"
+        assert route.calls[0].request.url.params["mimeType"] == "application/pdf"
+        assert route.calls[0].request.headers["Authorization"] == "Bearer tok"
+    finally:
+        await client.close()

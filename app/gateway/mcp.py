@@ -1,9 +1,12 @@
+import asyncio
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from starlette.types import Receive, Scope, Send
 
+from app.gateway.job_worker import JobWorker
+from app.gateway.jobs import job_queue
 from app.gateway.server import create_session_manager
 from app.gateway.usage import usage_recorder
 from app.integrations.google.drive_client import drive_client
@@ -35,7 +38,12 @@ async def mcp_lifespan(redis) -> AsyncIterator[None]:
     token_store.init(RedisStore(redis, "token:"))
     slack_token_store.init(RedisStore(redis, "slack:token:"))
     usage_recorder.init(redis)
+    job_queue.init(redis)
+    worker_task = asyncio.create_task(JobWorker(redis).run())
     async with manager.run():
         yield
+    worker_task.cancel()
+    with suppress(asyncio.CancelledError):
+        await worker_task
     await drive_client.close()
     await slack_client.close()

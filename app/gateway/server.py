@@ -9,19 +9,20 @@ from mcp.types import ErrorData
 
 from app.gateway.event_store import InMemoryEventStore
 from app.gateway.tools.drive_tools import DRIVE_REGISTRY, DRIVE_TOOLS
+from app.gateway.tools.job_tools import JOB_REGISTRY, JOB_TOOLS
 from app.gateway.tools.slack_tools import SLACK_REGISTRY, SLACK_TOOLS
 
 logger = logging.getLogger(__name__)
 
 
 async def handle_list_tools() -> list[types.Tool]:
-    return list(DRIVE_TOOLS) + list(SLACK_TOOLS)
+    return list(DRIVE_TOOLS) + list(SLACK_TOOLS) + list(JOB_TOOLS)
 
 
 def create_session_manager() -> StreamableHTTPSessionManager:
     mcp_server = Server("mcp-streamable-http-demo")
 
-    _registry: dict[str, Callable] = {**DRIVE_REGISTRY, **SLACK_REGISTRY}
+    _registry: dict[str, Callable] = {**DRIVE_REGISTRY, **SLACK_REGISTRY, **JOB_REGISTRY}
 
     @mcp_server.list_tools()
     async def _list() -> list[types.Tool]:
