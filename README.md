@@ -1,459 +1,239 @@
 # MCP Agent Gateway
 
-> Secure gateway that gives AI agents audited access to Google Drive and Slack — so teams spend less time switching tools and more time getting work done.
+> A secure, production-grade gateway that gives AI agents **audited, least-privilege access** to Google Drive and Slack over the Model Context Protocol — without ever leaking the user's identity token to a third party.
 
-## Why this exists
+<p align="center">
+  <img alt="tests" src="https://img.shields.io/badge/tests-184_passing-2ea44f">
+  <img alt="coverage" src="https://img.shields.io/badge/coverage-90%25-2ea44f">
+  <img alt="dependency CVEs" src="https://img.shields.io/badge/CVEs-0-2ea44f">
+  <img alt="bandit" src="https://img.shields.io/badge/bandit-0_high-2ea44f">
+  <img alt="confused deputy" src="https://img.shields.io/badge/Confused_Deputy-proven-2ea44f">
+</p>
 
-AI agents need to access multiple external APIs — documents in Google Drive, messages in Slack — but doing this securely is hard. The naive approach (forward the user's JWT to upstream APIs) creates a **Confused Deputy vulnerability**: the agent acts on behalf of a user without proper authorization context.
+<p align="center">
+  <img alt="Python 3.13" src="https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white">
+  <img alt="OAuth 2.1" src="https://img.shields.io/badge/OAuth-2.1-EB5424?logo=auth0&logoColor=white">
+  <img alt="RFC 9728" src="https://img.shields.io/badge/RFC-9728-555">
+  <img alt="RFC 7591" src="https://img.shields.io/badge/RFC-7591-555">
+  <img alt="MCP" src="https://img.shields.io/badge/MCP-Streamable_HTTP-6E56CF">
+  <img alt="license MIT" src="https://img.shields.io/badge/license-MIT-blue">
+</p>
 
-This gateway solves it with:
+---
 
-- **Two separate OAuth 2.1 flows**: downstream (client → gateway) and upstream (gateway → Drive/Slack)
-- **Token isolation**: each user's credentials are encrypted and never shared across integrations
-- **Rate limiting**: 100 requests/minute per user (Redis-backed sliding window)
-- **Usage tracking**: every tool call logged to Redis Streams for analytics
-- **Audit trail**: full visibility into who accessed what, when
+## The problem this solves
+
+AI agents want to read your Drive and post to your Slack. The naïve way — forward the
+user's bearer token straight to the upstream API — is a textbook **Confused Deputy
+vulnerability**: the upstream can't tell whether the agent was actually authorized to act,
+and a single stolen token unlocks everything.
+
+This gateway refuses to do that. It runs **two independent OAuth 2.1 trust boundaries**:
+
+```
+ Agent ──Bearer JWT──▶  GATEWAY  ──per-service OAuth token──▶  Google / Slack
+        (downstream)      │                  (upstream)
+                          └── the downstream JWT is NEVER forwarded upstream
+```
+
+The separation is **proven by a regression test** (`test_confused_deputy`) that asserts the
+downstream JWT never appears in any upstream request — so the guarantee can't silently rot.
+
+---
+
+## Highlight reel
+
+| What | How it's done | Why it's hard |
+|---|---|---|
+| 🛡️ **Confused Deputy prevention** | Dual OAuth flows, per-integration token mint | Most gateways forward the caller's token by default |
+| 🔑 **Standards-based auth** | OAuth 2.1 + RFC 9728 PRM + RFC 7591 Dynamic Client Registration | Any compliant MCP client connects with zero custom glue |
+| 🔒 **Tokens encrypted at rest** | Fernet (authenticated encryption), one key per provider | Redis compromise ≠ credential compromise |
+| ⏱️ **Atomic rate limiting** | Sliding window in a single Redis **Lua** script | Naïve counters race under concurrency |
+| 📈 **Usage metering** | `tiktoken` token counting → Redis Streams + admin API | Per-user cost/visibility without log scraping |
+| ⚙️ **Async job queue** | Redis Streams consumer groups + ownership guard | Large Drive exports outlive a single request |
+| 📨 **Signed webhooks** | Slack HMAC v0 + timestamp freshness + replay guard + idempotency | Webhooks are a classic spoofing/replay vector |
+| 🔭 **Distributed tracing** | OpenTelemetry zero-code auto-instrumentation (FastAPI + httpx), OTLP export, trace-id stamped on every log line | Correlating a request across middleware, MCP, and upstream calls is otherwise guesswork |
+| 🧱 **Clean DDD architecture** | Bounded contexts: `identity` / `gateway` / `integrations` / `shared` | New integration = one folder, one contract |
+
+---
 
 ## Architecture
 
 ```mermaid
 graph TB
-    subgraph "AI Agent"
+    subgraph Agent["AI Agent"]
         A[MCP Client]
     end
-    
-    subgraph "MCP Gateway (FastAPI)"
-        B[AccessGuard<br/>JWT Validation]
-        C[RateLimiter<br/>100 req/min]
-        D[UsageTracker<br/>Redis Streams]
-        E[Tool Registry<br/>Drive + Slack]
+    subgraph GW["MCP Gateway · FastAPI"]
+        B[AccessGuard<br/>JWT validation]
+        C[RateLimiter<br/>atomic Lua]
+        D[UsageMeter<br/>Redis Streams]
+        E[Tool Registry<br/>Drive · Slack · Jobs]
     end
-    
-    subgraph "Identity Provider"
+    subgraph IdP["Identity Provider"]
         F[Keycloak<br/>OAuth 2.1]
     end
-    
-    subgraph "Upstream APIs"
-        G[Google Drive API]
-        H[Slack API]
+    subgraph Up["Upstream APIs"]
+        G[Google Drive]
+        H[Slack]
     end
-    
-    A -->|"Bearer JWT<br/>(downstream)"| B
-    B -->|"Validate"| F
-    F -->|"Claims"| B
+
+    A -->|Bearer JWT · downstream| B
+    B -->|validate RS256| F
+    F -->|claims| B
     B --> C --> D --> E
-    E -->|"OAuth token<br/>(upstream)"| G
-    E -->|"OAuth token<br/>(upstream)"| H
-    
-    style A fill:#e1f5ff
-    style B fill:#fff4e1
-    style F fill:#ffe1e1
-    style G fill:#e1ffe1
-    style H fill:#e1ffe1
+    E -->|per-service OAuth token · upstream| G
+    E -->|per-service OAuth token · upstream| H
+
+    classDef agent fill:#1565c0,stroke:#0d3c75,stroke-width:2px,color:#fff;
+    classDef gw fill:#ef6c00,stroke:#9c4500,stroke-width:2px,color:#fff;
+    classDef idp fill:#c62828,stroke:#7f1717,stroke-width:2px,color:#fff;
+    classDef up fill:#2e7d32,stroke:#1b4d1f,stroke-width:2px,color:#fff;
+
+    class A agent;
+    class B,C,D,E gw;
+    class F idp;
+    class G,H up;
 ```
 
-**Key principle:** Downstream JWT is **never** forwarded to upstream APIs (Confused Deputy prevention). Each integration gets its own OAuth token, scoped to that specific service.
+**Request path:** `AccessGuard` (Bearer → validate → `request.state.user`; bypasses `/health`
+and `/.well-known/*`) → `request_logger` → MCP app at `/mcp/`. Middleware wraps the MCP route
+itself, so the protocol traffic is authenticated like everything else.
 
-## Quick Start
+---
 
-### Prerequisites
+## Capabilities
 
-- Python 3.13+
-- [uv](https://docs.astral.sh/uv/) (Python package manager)
-- [just](https://github.com/casey/just) (task runner)
-- Docker & Docker Compose
+### Google Drive
+| Tool | Does |
+|---|---|
+| `drive-search-files` | Search files by query / MIME type |
+| `drive-get-file-content` | Fetch a file's content |
+| `drive-list-recent` | List recently modified files |
+| `drive-export-large-file` | Enqueue a large export as an async job |
 
-### Installation
+### Slack
+| Tool | Does |
+|---|---|
+| `slack-send-message` | Post a message to a channel |
+| `slack-search-messages` | Search message history |
+
+### Jobs
+| Tool | Does |
+|---|---|
+| `wait-for-job` | Block on an async job until it completes (ownership-checked) |
+
+Inbound: `POST /webhooks/slack` — HMAC-verified, replay-guarded, idempotent fan-out to a
+`events:slack` stream.
+
+---
+
+## Security posture
+
+Audited (latest run, this codebase):
+
+- **`pip-audit`** → 0 known dependency vulnerabilities
+- **`bandit`** static analysis → 0 high, 0 medium-critical (only low-severity false positives on OAuth URL constants)
+- **62 dedicated security tests** green, including the Confused Deputy proof and `verify=True` (TLS) assertions on every outbound HTTP client
+
+Built-in defenses:
+
+- **OAuth 2.1 + RFC 9728** protected-resource discovery; **RS256** JWT validation with JWKS TTL cache
+- **Dynamic Client Registration (RFC 7591)** for hands-off client onboarding
+- **Fernet** token encryption at rest, per-provider keys
+- **OriginGuard** (DNS-rebinding defense on `/mcp`), **SecurityHeaders** (HSTS, nosniff), restricted **CORS**
+- **SensitiveDataFilter** masks tokens in structured logs; **OpenTelemetry** traces (FastAPI + httpx auto-instrumented, OTLP) correlate every log line by trace-id
+- CI runs `bandit` + `pip-audit` on every push
+
+---
+
+## Quick start
 
 ```bash
-# Clone repository
-git clone https://github.com/yourusername/mcp-agent-gateway.git
-cd mcp-agent-gateway
-
-# Install dependencies
-just deps
-
-# Start Keycloak + Redis
-just docker-up
-
-# Start development server
-just dev
+just deps        # uv sync
+just docker-up   # Keycloak + Redis
+just dev         # uvicorn --reload
 ```
 
-Server runs at http://localhost:8000  
-Keycloak admin at http://localhost:8080 (admin/admin)  
-MCP endpoint at http://localhost:8000/mcp/
-
-### First Request
+Gateway → http://localhost:8000 · MCP → http://localhost:8000/mcp/ · Keycloak → http://localhost:8080
 
 ```bash
-# Get JWT from Keycloak (example)
+# get a token, then call a tool
 TOKEN=$(curl -s -X POST http://localhost:8080/realms/master/protocol/openid-connect/token \
-  -d "grant_type=password" \
-  -d "client_id=admin-cli" \
-  -d "username=admin" \
-  -d "password=admin" | jq -r .access_token)
+  -d grant_type=password -d client_id=admin-cli -d username=admin -d password=admin | jq -r .access_token)
 
-# Call a tool
 curl -X POST http://localhost:8000/mcp/ \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "jsonrpc": "2.0",
-    "method": "tools/call",
-    "params": {
-      "name": "drive-search-files",
-      "arguments": {"query": "contract", "max_results": 10}
-    },
-    "id": 1
-  }'
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"tools/call","id":1,
+       "params":{"name":"drive-search-files","arguments":{"query":"contract","max_results":10}}}'
 ```
 
-## Available Tools
+---
 
-### Google Drive Integration
+## Extensibility — add an integration in one folder
 
-| Tool | Description | Example Use Case |
-|------|-------------|------------------|
-| `drive-search-files` | Search files by query | "Find the contract for Acme Corp" |
-| `drive-get-file-content` | Download file content | "Read the Q3 report" |
-| `drive-list-recent` | List recently modified files | "Show me what changed this week" |
-
-### Slack Integration
-
-| Tool | Description | Example Use Case |
-|------|-------------|------------------|
-| `slack-send-message` | Send message to channel | "Notify #sales about new lead" |
-| `slack-search-messages` | Search message history | "Find discussions about Project X" |
-
-### Async Jobs
-
-| Tool | Description | Example Use Case |
-|------|-------------|------------------|
-| `job-enqueue` | Enqueue long-running task | "Export large file to Drive" |
-| `job-status` | Check job status | "Is the export done?" |
-| `job-result` | Retrieve job result | "Get the export URL" |
-
-## Security
-
-### Authentication & Authorization
-
-- **OAuth 2.1 + RFC 9728** (Protected Resource Metadata): standardized discovery for protected resources
-- **JWT validation**: RS256 signatures, issuer/audience verification
-- **Downstream/upstream separation**: client JWT never forwarded to Google/Slack (Confused Deputy prevention)
-- **Dynamic Client Registration**: RFC 7591 for automated client onboarding
-
-### Data Protection
-
-- **Token encryption at rest**: Fernet symmetric encryption for refresh tokens
-- **Per-integration keys**: each service has its own encryption secret
-- **Defense in depth**: even if Redis is compromised, tokens remain encrypted
-
-### Rate Limiting & Abuse Prevention
-
-- **Redis-backed sliding window**: atomic operations prevent race conditions
-- **100 requests/minute per user**: configurable via environment variables
-- **429 Too Many Requests**: with `Retry-After` header
-
-### Audit & Compliance
-
-- **Usage tracking**: every tool call logged to Redis Streams
-- **Structured logging**: JSON logs with request IDs for tracing
-- **Security headers**: HSTS, X-Frame-Options, CSP, etc.
-- **Origin guard**: CORS restricted to trusted origins
-
-### Dependency Security
-
-- **pip-audit**: scans for known vulnerabilities in dependencies
-- **bandit**: static analysis for security issues
-- **CI enforcement**: both run in GitHub Actions pipeline
-
-## Adding a 3rd Integration (e.g., HubSpot)
-
-The gateway is designed to be extensible. To add a new integration:
-
-### 1. Create Integration Module
-
-```bash
-# Directory structure
-app/integrations/hubspot/
-├── __init__.py
-├── oauth_flow.py      # OAuth 2.1 flow (authorization URL, callback handler)
-├── token_store.py     # Token persistence (Redis + Fernet encryption)
-└── hubspot_client.py  # API client (httpx + retry logic)
-```
-
-### 2. Implement the UpstreamProvider Contract
+Every upstream implements one contract:
 
 ```python
-# app/integrations/hubspot/hubspot_client.py
-from app.integrations.base import UpstreamProvider
-
-class HubSpotClient(UpstreamProvider):
-    def __init__(self, user_id: str):
-        self.user_id = user_id
-        self.token_store = HubSpotTokenStore(user_id)
-
-    async def get_valid_token(self) -> str:
-        return await self.token_store.get_valid_token()
+# app/integrations/base.py
+class UpstreamProvider(ABC):
+    @abstractmethod
+    async def get_valid_token(self, user_id: str) -> str: ...
 ```
 
-### 3. Create Tools
+Drop in `app/integrations/{provider}/` with `oauth_flow.py`, `token_store.py`,
+`{provider}_client.py`, register a tool module under `app/gateway/tools/`, add config keys —
+done. The same dual-OAuth, encryption, and rate-limit guarantees apply automatically.
+HubSpot is the next planned provider.
 
-```python
-# app/gateway/tools/hubspot_tools.py
-from app.gateway.server import mcp
+---
 
-@mcp.tool()
-async def hubspot_get_contact(email: str) -> dict:
-    """Get contact details from HubSpot."""
-    client = HubSpotClient(current_user_id.get())
-    token = await client.get_valid_token()
-    return await http_client.get(f"https://api.hubapi.com/contacts/{email}", headers={"Authorization": f"Bearer {token}"})
-```
+## Engineering decisions (the short version)
 
-### 4. Register OAuth Endpoints
+| Decision | Choice | Because |
+|---|---|---|
+| State backend | **Redis** (`Store` protocol abstracts it; `InMemoryStore` for tests) | Horizontal scale, atomic Lua, native Streams |
+| Auth | **OAuth 2.1 + RFC 9728**, not API keys | Interoperable, replay-resistant, audited spec |
+| Trust model | **Two separate OAuth flows** | Confused-Deputy prevention + scope isolation |
+| Token storage | **Fernet** authenticated encryption | Defense in depth; tamper-evident |
+| Rate limiting | **Sliding window** in Lua | Fair across window boundaries, race-free |
+| Usage tracking | **Redis Streams** | Real-time queryable, consumer groups, retention |
 
-```python
-# app/authorization/router.py
-@router.post("/auth/hubspot/initiate")
-async def initiate_hubspot_auth(...):
-    return hubspot_oauth_flow.initiate(...)
+---
 
-@router.get("/auth/hubspot/callback")
-async def hubspot_callback(...):
-    return await hubspot_oauth_flow.handle_callback(...)
-```
+## Quality
 
-### 5. Add Configuration
+- **184 tests** passing · **90%** coverage (`respx`-mocked HTTP, security regression suite) — see [`COVERAGE.md`](COVERAGE.md)
+- **Ruff** lint + format clean (`E,F,I,N,W,UP`, line-length 120)
+- Python **3.13**, `uv` package manager
+- `just ci` runs the full gate locally
 
 ```bash
-# .env
-HUBSPOT_CLIENT_ID=your_client_id
-HUBSPOT_CLIENT_SECRET=your_client_secret
-HUBSPOT_TOKEN_ENCRYPTION_KEY=fernet_key_here
+just test       # pytest
+just test-cov   # + coverage
+just lint       # ruff check + format
+just security   # bandit + pip-audit
+just ci         # everything
 ```
 
-### 6. Test
+---
 
-```python
-# tests/integrations/hubspot/test_hubspot_client.py
-async def test_hubspot_get_contact():
-    client = HubSpotClient("user-123")
-    result = await client.get_valid_token()
-    assert isinstance(result, str)
-```
+## Tech stack
 
-## Design Decisions
+<p>
+  <img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white">
+  <img alt="Python" src="https://img.shields.io/badge/Python_3.13-3776AB?logo=python&logoColor=white">
+  <img alt="Redis" src="https://img.shields.io/badge/Redis-DC382D?logo=redis&logoColor=white">
+  <img alt="Keycloak" src="https://img.shields.io/badge/Keycloak-4D4D4D?logo=keycloak&logoColor=white">
+  <img alt="Google Drive" src="https://img.shields.io/badge/Google_Drive-4285F4?logo=googledrive&logoColor=white">
+  <img alt="Slack" src="https://img.shields.io/badge/Slack-4A154B?logo=slack&logoColor=white">
+  <img alt="OpenTelemetry" src="https://img.shields.io/badge/OpenTelemetry-000000?logo=opentelemetry&logoColor=white">
+  <img alt="Pydantic" src="https://img.shields.io/badge/Pydantic-E92063?logo=pydantic&logoColor=white">
+  <img alt="Docker" src="https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white">
+</p>
 
-### 1. Redis vs In-Memory Stores
-
-**Choice:** Redis for rate limiting, usage tracking, and token storage
-
-**Rationale:**
-- **Production-ready**: supports horizontal scaling (multiple gateway instances)
-- **Atomic operations**: Lua scripts prevent race conditions in rate limiting
-- **Persistence**: data survives restarts (important for usage analytics)
-- **Streams**: native support for append-only logs (usage tracking)
-
-**Trade-off:** Adds operational complexity vs simple in-memory dicts
-
-### 2. OAuth 2.1 + RFC 9728 vs Custom Auth
-
-**Choice:** Standards-compliant OAuth 2.1 with Protected Resource Metadata
-
-**Rationale:**
-- **Interoperability**: any MCP client can connect
-- **Security**: spec audited by community, prevents token replay
-- **Production-ready**: Keycloak as authorization server (battle-tested)
-
-**Trade-off:** More complex setup vs simple API keys
-
-### 3. Two Separate OAuth Flows
-
-**Choice:** Downstream (client → gateway) and upstream (gateway → Drive/Slack) are completely separate
-
-**Rationale:**
-- **Confused Deputy prevention**: downstream JWT never forwarded to upstream APIs
-- **Scope isolation**: each integration has its own OAuth scope
-- **Audit clarity**: clear separation of "who asked" vs "what was accessed"
-
-**Trade-off:** Users must authorize twice (once for gateway, once for each integration)
-
-### 4. Fernet Encryption vs Plaintext
-
-**Choice:** Fernet symmetric encryption for refresh tokens
-
-**Rationale:**
-- **Defense in depth**: even if Redis is compromised, tokens are encrypted
-- **Authenticated encryption**: prevents tampering
-- **Simple key management**: one key per integration
-
-**Trade-off:** Slight performance overhead vs plaintext storage
-
-### 5. Sliding Window vs Fixed Window Rate Limiting
-
-**Choice:** Sliding window algorithm (Redis-backed)
-
-**Rationale:**
-- **Fairness**: prevents burst at window boundaries
-- **Predictable**: smooth rate limiting over time
-- **Atomic**: Lua script ensures consistency
-
-**Trade-off:** More complex implementation vs fixed window (simple counter)
-
-### 6. Redis Streams vs Logs for Usage Tracking
-
-**Choice:** Redis Streams for usage tracking
-
-**Rationale:**
-- **Real-time analytics**: can query recent usage without log parsing
-- **Retention policies**: automatic cleanup of old data
-- **Consumer groups**: multiple services can process the same stream
-
-**Trade-off:** Requires Redis vs writing to stdout/files
-
-## Development
-
-```bash
-# Run tests
-just test
-
-# Run tests with coverage
-just test-cov
-
-# Lint and format
-just lint
-
-# Run full CI pipeline
-just ci
-
-# Start Docker services
-just docker-up
-
-# Check service health
-just health
-
-# Run security scanners
-just security
-```
-
-## Testing
-
-- **184 tests** passing
-- **90% code coverage**
-- **Integration tests** with respx (HTTP mocking)
-- **Security tests** including Confused Deputy proof
-
-See `COVERAGE.md` for detailed coverage report.
-
-## Deployment
-
-### Docker
-
-```bash
-docker build -t mcp-agent-gateway .
-docker run -p 8000:8000 mcp-agent-gateway
-```
-
-### Environment Variables
-
-```bash
-# Required
-REDIS_URL=redis://localhost:6379
-OAUTH_ISSUER_URL=http://localhost:8080/realms/master
-OAUTH_EXPECTED_AUDIENCE=mcp-gateway
-GATEWAY_BASE_URL=http://localhost:8000
-
-# Google Drive
-GOOGLE_CLIENT_ID=your_client_id
-GOOGLE_CLIENT_SECRET=your_client_secret
-GOOGLE_TOKEN_ENCRYPTION_KEY=fernet_key_here
-GOOGLE_REDIRECT_URI=http://localhost:8000/auth/google/callback
-
-# Slack
-SLACK_CLIENT_ID=your_client_id
-SLACK_CLIENT_SECRET=your_client_secret
-SLACK_TOKEN_ENCRYPTION_KEY=fernet_key_here
-SLACK_REDIRECT_URI=http://localhost:8000/auth/slack/callback
-```
-
-## Project Structure
-
-```
-app/
-├── app/
-│   ├── main.py                         # FastAPI application bootstrap
-│   ├── config.py                       # Pydantic settings
-│   ├── logging.py                      # Structured logging config
-│   ├── authorization/
-│   │   └── router.py                   # OAuth endpoints (authorize, callbacks)
-│   ├── identity/
-│   │   ├── token_validator.py          # JWT validation (RS256, JWKS)
-│   │   ├── jwks_client.py             # JWKS client with TTL cache
-│   │   ├── protected_resource.py      # RFC 9728 metadata endpoint
-│   │   └── client_registration/       # DCR (RFC 7591)
-│   ├── gateway/
-│   │   ├── server.py                   # MCP session manager
-│   │   ├── mcp.py                      # MCP ASGI app + lifespan
-│   │   ├── event_store.py             # Event replay for resumability
-│   │   ├── health.py                   # Health check endpoint
-│   │   ├── jobs.py                     # Async job queue
-│   │   ├── job_worker.py              # Job worker process
-│   │   ├── usage.py                    # Usage tracking logic
-│   │   ├── usage_router.py            # Usage stats API
-│   │   ├── webhooks_router.py         # Webhook endpoints
-│   │   ├── middleware/
-│   │   │   ├── access_guard.py        # Bearer JWT validation
-│   │   │   ├── rate_limiter.py        # Sliding window rate limit
-│   │   │   ├── request_logger.py      # Request ID + timing
-│   │   │   ├── security_headers.py    # HSTS, CSP, etc.
-│   │   │   └── origin_guard.py        # CORS validation
-│   │   └── tools/
-│   │       ├── drive_tools.py         # Google Drive MCP tools
-│   │       ├── slack_tools.py         # Slack MCP tools
-│   │       └── job_tools.py           # Async job MCP tools
-│   ├── integrations/
-│   │   ├── base.py                     # UpstreamProvider ABC
-│   │   ├── google/
-│   │   │   ├── drive_client.py        # Google Drive API client
-│   │   │   ├── oauth_flow.py          # Google OAuth 2.1 flow
-│   │   │   ├── token_store.py         # Token persistence (Fernet)
-│   │   │   └── constants.py           # Google API constants
-│   │   └── slack/
-│   │       ├── slack_client.py        # Slack API client
-│   │       ├── oauth_flow.py          # Slack OAuth flow
-│   │       ├── token_store.py         # Token persistence (Fernet)
-│   │       ├── signature.py           # Webhook signature verification
-│   │       └── constants.py           # Slack API constants
-│   └── shared/
-│       ├── store.py                    # RedisStore + token stores
-│       ├── redis.py                    # Redis connection factory
-│       ├── http_client.py             # Shared async HTTP client
-│       ├── exceptions.py              # Domain exceptions
-│       └── dependencies.py            # FastAPI dependencies
-├── tests/                              # Test suite (mirrors app/)
-├── docker-compose.local.yml           # Local development services
-├── docker-compose.production.yml      # Production deployment
-├── Justfile                            # Developer commands
-├── COVERAGE.md                        # Test coverage report
-└── README.md                          # This file
-```
+Also: **httpx** + **tenacity** (resilient upstream calls) · **PyJWT** (RS256/JWKS) · **cryptography** (Fernet) · **tiktoken** (token counting) · **structlog** (JSON logs).
 
 ## License
 
 MIT
-
-## Contributing
-
-Contributions welcome! Please:
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Run `just ci` to ensure tests pass
-5. Submit a pull request
-
----
-
-**Built with:** FastAPI, Redis, Keycloak, Google Drive API, Slack API, MCP 2025-11-25

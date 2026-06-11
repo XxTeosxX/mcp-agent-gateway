@@ -12,6 +12,15 @@ services:
     env_file:
       - path: ./.env
         required: false
+    environment:
+      # Intra-network overrides — inside the container "localhost" is the container
+      # itself, not another service. Use compose service names.
+      REDIS_URL: redis://valkey:6379
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      # NOTE (Keycloak hostname): the token `iss` claim must equal OAUTH_ISSUER_URL.
+      # With `start-dev` the issuer is request-host derived. To reach Keycloak from
+      # this container AND keep issuers consistent, add `127.0.0.1 keycloak` to your
+      # host /etc/hosts and set OAUTH_ISSUER_URL=http://keycloak:8080/realms/mcp-gateway.
     ports:
       - "8000:8000"
     command: /start
@@ -48,3 +57,14 @@ services:
       timeout: 5s
       retries: 10
       start_period: 30s
+
+  # OTLP trace collector + UI (http://localhost:16686). Target for the gateway's
+  # OpenTelemetry export; tracing degrades gracefully if this service is absent.
+  jaeger:
+    image: jaegertracing/all-in-one:1.62
+    container_name: mcp_agent_gateway_local_jaeger
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"
+      - "4318:4318"

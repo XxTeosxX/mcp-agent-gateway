@@ -1,4 +1,7 @@
-# Update .env.production before deploying — set POSTGRES_PASSWORD, SECRET_KEY, etc.
+# Every gateway setting comes from the environment — no env_file.
+# Required values use ${VAR:?...} and abort the run if unset.
+# Everything else uses ${VAR:-default}: overridable from the shell at
+# `docker compose up`, with a sane fallback when unset.
 name: mcp_agent_gateway_production
 
 services:
@@ -9,9 +12,89 @@ services:
     image: mcp_agent_gateway_production_fastapi
     container_name: mcp_agent_gateway_production_fastapi
     restart: unless-stopped
-    env_file:
-      - path: ./.env.production
-        required: false
+    environment:
+      # Application
+      PROJECT_NAME: ${PROJECT_NAME:-MCP Agent Gateway}
+      VERSION: ${VERSION:-0.1.0}
+      DEBUG: ${DEBUG:-false}
+
+      # Redis-compatible store (provided by the valkey service)
+      REDIS_URL: ${REDIS_URL:-redis://valkey:6379}
+      CLIENT_REGISTRY_TTL: ${CLIENT_REGISTRY_TTL:-86400}
+
+      # Rate limiting
+      RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+      RATE_LIMIT_MAX_REQUESTS: ${RATE_LIMIT_MAX_REQUESTS:-100}
+      RATE_LIMIT_WINDOW_SECONDS: ${RATE_LIMIT_WINDOW_SECONDS:-60}
+
+      # OAuth 2.1 (RFC 9728) — required
+      OAUTH_ISSUER_URL: ${OAUTH_ISSUER_URL:?set OAUTH_ISSUER_URL in the deploy env}
+      OAUTH_EXPECTED_AUDIENCE: ${OAUTH_EXPECTED_AUDIENCE:?set OAUTH_EXPECTED_AUDIENCE in the deploy env}
+      OAUTH_JWKS_CACHE_TTL: ${OAUTH_JWKS_CACHE_TTL:-3600}
+      GATEWAY_BASE_URL: ${GATEWAY_BASE_URL:?set GATEWAY_BASE_URL in the deploy env}
+
+      # CORS (JSON list)
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-[]}
+
+      # Dynamic Client Registration (RFC 7591)
+      DCR_REGISTRATION_ENDPOINT: ${DCR_REGISTRATION_ENDPOINT:-}
+      DCR_INITIAL_ACCESS_TOKEN: ${DCR_INITIAL_ACCESS_TOKEN:-}
+
+      # Google upstream
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_TOKEN_ENCRYPTION_KEY: ${GOOGLE_TOKEN_ENCRYPTION_KEY:-}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-}
+      GOOGLE_DRIVE_TIMEOUT: ${GOOGLE_DRIVE_TIMEOUT:-10.0}
+      GOOGLE_DRIVE_MAX_CONNECTIONS: ${GOOGLE_DRIVE_MAX_CONNECTIONS:-100}
+      GOOGLE_DRIVE_MAX_KEEPALIVE: ${GOOGLE_DRIVE_MAX_KEEPALIVE:-20}
+      GOOGLE_DRIVE_MAX_RETRIES: ${GOOGLE_DRIVE_MAX_RETRIES:-3}
+
+      # Slack upstream
+      SLACK_CLIENT_ID: ${SLACK_CLIENT_ID:-}
+      SLACK_CLIENT_SECRET: ${SLACK_CLIENT_SECRET:-}
+      SLACK_TOKEN_ENCRYPTION_KEY: ${SLACK_TOKEN_ENCRYPTION_KEY:-}
+      SLACK_REDIRECT_URI: ${SLACK_REDIRECT_URI:-}
+      SLACK_SIGNING_SECRET: ${SLACK_SIGNING_SECRET:-}
+      SLACK_TIMEOUT: ${SLACK_TIMEOUT:-8.0}
+      SLACK_MAX_RETRIES: ${SLACK_MAX_RETRIES:-3}
+
+      # Async job export storage (persisted volume below)
+      EXPORT_DIR: ${EXPORT_DIR:-/data/exports}
+
+      # OpenTelemetry (consumed by the OTel SDK)
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-mcp_agent_gateway}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:?set OTEL_EXPORTER_OTLP_ENDPOINT in the deploy env}
+      OTEL_EXPORTER_OTLP_PROTOCOL: ${OTEL_EXPORTER_OTLP_PROTOCOL:-http/protobuf}
+      OTEL_TRACES_EXPORTER: ${OTEL_TRACES_EXPORTER:-otlp_proto_http}
+      OTEL_METRICS_EXPORTER: ${OTEL_METRICS_EXPORTER:-none}
+      OTEL_LOGS_EXPORTER: ${OTEL_LOGS_EXPORTER:-none}
+      OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-service.version=0.1.0,deployment.environment=production}
+    volumes:
+      - exports_data:/data/exports
     ports:
       - "8000:8000"
     command: /start
+    depends_on:
+      valkey:
+        condition: service_healthy
+
+  # Redis-compatible store: OAuth state, client registry, encrypted tokens,
+  # rate-limit counters, usage + job streams. Persisted — losing it forces
+  # every user to re-authorize.
+  valkey:
+    image: valkey/valkey:8-alpine
+    container_name: mcp_agent_gateway_production_valkey
+    restart: unless-stopped
+    command: ["valkey-server", "--save", "60", "1", "--appendonly", "yes"]
+    volumes:
+      - valkey_data:/data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  valkey_data:
+  exports_data:
