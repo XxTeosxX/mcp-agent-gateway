@@ -20,6 +20,7 @@ _AUTH_BYPASS_PREFIXES = (
     "/health",
     "/.well-known",
     "/docs",
+    "/webhooks",
 )
 
 

@@ -10,6 +10,7 @@ from app.gateway.middleware.access_guard import AccessGuard
 from app.gateway.middleware.rate_limiter import RateLimiterMiddleware
 from app.gateway.middleware.request_logger import request_logging_middleware
 from app.gateway.usage_router import router as usage_router
+from app.gateway.webhooks_router import router as webhooks_router
 from app.identity.protected_resource import router as identity_router
 from app.logging import configure_logging
 from app.shared.http_client import HttpClient
@@ -56,5 +57,6 @@ app.include_router(health_router)
 app.include_router(identity_router)
 app.include_router(authorization_router)
 app.include_router(usage_router)
+app.include_router(webhooks_router)
 
 app.add_route("/mcp/", mcp_app)

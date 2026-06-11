@@ -43,6 +43,7 @@ class Settings(BaseSettings):
 
     SLACK_TIMEOUT: float = 8.0
     SLACK_MAX_RETRIES: int = 3
+    SLACK_SIGNING_SECRET: str = ""
 
     EXPORT_DIR: str = "/tmp/exports"
 
