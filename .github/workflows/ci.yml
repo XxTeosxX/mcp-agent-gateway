@@ -28,3 +28,14 @@ jobs:
 
       - name: Pytest
         run: uv run pytest
+
+      - name: Bandit (static security analysis)
+        run: uv run bandit -r app/ -s B101 -ll
+
+      - name: Export locked dependencies
+        run: uv export --frozen --no-dev --format requirements-txt > requirements.txt
+
+      - name: pip-audit (dependency vulnerabilities)
+        uses: pypa/gh-action-pip-audit@v1
+        with:
+          inputs: requirements.txt

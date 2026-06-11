@@ -1,210 +1,459 @@
 # MCP Agent Gateway
 
-> A secure gateway that gives AI agents audited access to HubSpot, Google Drive, and Slack — so sales reps spend less time switching tools and more time with customers.
+> Secure gateway that gives AI agents audited access to Google Drive and Slack — so teams spend less time switching tools and more time getting work done.
 
 ## Why this exists
 
-### The problem
+AI agents need to access multiple external APIs — documents in Google Drive, messages in Slack — but doing this securely is hard. The naive approach (forward the user's JWT to upstream APIs) creates a **Confused Deputy vulnerability**: the agent acts on behalf of a user without proper authorization context.
 
-A mid-size sales company has 20 reps. Before every important meeting, each one runs the same manual sequence: opens HubSpot to check the customer's history, opens Google Drive to find the proposal sent last week, and messages the manager on Slack to say the meeting is happening.
+This gateway solves it with:
 
-Three tools, three context switches. 20 reps, 5 meetings per day each. **300 daily context switches that generate zero value** — draining attention from people who should be focused on the customer.
-
-The pain compounds at follow-up time. Deals stall because nobody noticed the proposal was sent 10 days ago with no reply. No alert. No automation. Just a tracking spreadsheet nobody updates.
-
-### Why "just connect an AI to the APIs" doesn't work
-
-The obvious answer is to put an AI agent in front of HubSpot, Drive, and Slack. The problem is that doing it securely is where most projects break:
-
-- **Credential isolation:** with a shared API key, the agent acting for rep Carlos can access rep Ana's data.
-- **Confused Deputy:** if the agent forwards the user's token directly to external APIs, it acts on someone's behalf without being specifically authorized for that action on that service.
-- **No rate limiting:** a buggy agent sweeps the entire HubSpot and burns the company's API quota.
-- **No audit trail:** when something goes wrong, there's no way to know which agent did what, with whose token, and when.
-
-### What this gateway solves
-
-The gateway sits between the AI agent and the company's tools. It does one thing and does it right: **ensures the agent accesses the right data, for the right user, within the right limits, and leaves a full audit trail.**
-
-- The agent presents a token identifying rep Carlos. The gateway validates that token, extracts the identity, and only then retrieves Carlos's HubSpot token — never reusing another user's credential.
-- If the agent tries to make more than 100 calls per minute, the gateway returns 429 and protects the API quota for the other reps.
-- Every tool call produces an event in the audit log: who requested it, which tool, when, how many tokens were consumed.
-
-### The workflow this showcase demonstrates
-
-```mermaid
-sequenceDiagram
-    participant Scheduler as ⏰ Scheduler (9 AM)
-    participant Agent as 🤖 AI Agent
-    participant GW as MCP Gateway
-    participant HS as HubSpot
-    participant Drive as Google Drive
-    participant Slack as Slack
-
-    Scheduler->>Agent: trigger daily pipeline cycle
-
-    Agent->>GW: hubspot_list_stalled_deals(stalled_after_days=7)
-    GW->>HS: GET /crm/v3/objects/deals/search<br>[token isolated per user_id]
-    HS-->>GW: stalled deals: Acme Corp (12d), Beta Ltd (8d)
-    GW-->>Agent: [StalledDeal x2]
-
-    loop for each deal in parallel
-        Agent->>GW: drive_search_files(query="proposal Acme Corp")
-        GW->>Drive: GET /drive/v3/files<br>[token isolated per user_id]
-        Drive-->>GW: Proposal_Acme_v2.pdf → link
-        GW-->>Agent: {file_id, webViewLink}
-
-        Agent->>GW: slack_send_message(channel="#sales", text="⚠️ Deal Acme Corp stalled 12d...")
-        GW->>Slack: POST /chat.postMessage<br>[token isolated per user_id]
-        Slack-->>GW: ok
-        GW-->>Agent: message sent
-    end
-
-    Note over GW: every call audited in the event store<br>rate limit: 100 req/min per user_id
-```
-
-Every morning at 9 AM, the agent runs this cycle. Rep Carlos opens Slack and knows exactly what needs attention — with a direct link to the proposal — before his first coffee.
-
-Before a meeting, Carlos asks the agent for a pre-call briefing. The agent calls `hubspot_get_meeting_briefing`, retrieves the contact's history, current deal stage, and last recorded note, and returns a natural-language summary. After the meeting, Carlos dictates the outcome. The agent logs the note to the right deal via `hubspot_log_meeting_outcome` — without Carlos ever opening HubSpot.
+- **Two separate OAuth 2.1 flows**: downstream (client → gateway) and upstream (gateway → Drive/Slack)
+- **Token isolation**: each user's credentials are encrypted and never shared across integrations
+- **Rate limiting**: 100 requests/minute per user (Redis-backed sliding window)
+- **Usage tracking**: every tool call logged to Redis Streams for analytics
+- **Audit trail**: full visibility into who accessed what, when
 
 ## Architecture
 
 ```mermaid
 graph TB
-    A[MCP Client<br>AI Agent] -->|Bearer JWT| B[MCP Gateway<br>FastAPI]
-
-    B -->|validate aud · iss · exp| C[Keycloak<br>Auth Server]
-    C -->|confirmed identity| B
-
-    B -->|token per user_id| D[HubSpot<br>CRM]
-    B -->|token per user_id| E[Google Drive<br>Docs]
-    B -->|token per user_id| F[Slack<br>Messaging]
-
-    style C fill:#f5f0e8,stroke:#c9a84c,stroke-width:2px
-    style B fill:#e8f0fe,stroke:#4a6fa5,stroke-width:2px
+    subgraph "AI Agent"
+        A[MCP Client]
+    end
+    
+    subgraph "MCP Gateway (FastAPI)"
+        B[AccessGuard<br/>JWT Validation]
+        C[RateLimiter<br/>100 req/min]
+        D[UsageTracker<br/>Redis Streams]
+        E[Tool Registry<br/>Drive + Slack]
+    end
+    
+    subgraph "Identity Provider"
+        F[Keycloak<br/>OAuth 2.1]
+    end
+    
+    subgraph "Upstream APIs"
+        G[Google Drive API]
+        H[Slack API]
+    end
+    
+    A -->|"Bearer JWT<br/>(downstream)"| B
+    B -->|"Validate"| F
+    F -->|"Claims"| B
+    B --> C --> D --> E
+    E -->|"OAuth token<br/>(upstream)"| G
+    E -->|"OAuth token<br/>(upstream)"| H
+    
+    style A fill:#e1f5ff
+    style B fill:#fff4e1
+    style F fill:#ffe1e1
+    style G fill:#e1ffe1
+    style H fill:#e1ffe1
 ```
 
-Two OAuth flows, completely separate. The token a client presents to the gateway is never forwarded to HubSpot, Drive, or Slack — doing so would be the [Confused Deputy problem](https://en.wikipedia.org/wiki/Confused_deputy_problem).
+**Key principle:** Downstream JWT is **never** forwarded to upstream APIs (Confused Deputy prevention). Each integration gets its own OAuth token, scoped to that specific service.
 
-## Project Structure
+## Quick Start
 
-The codebase is organized into four Bounded Contexts (Domain-Driven Design):
+### Prerequisites
 
-| Context | Path | Responsibility |
-|---|---|---|
-| **gateway** | `app/gateway/` | MCP server (Streamable HTTP), tools exposed to agents, request middleware |
-| **identity** | `app/identity/` | Downstream JWT validation (RFC 8707), RFC 9728 metadata, MCP client registration lifecycle |
-| **integrations** | `app/integrations/` | Upstream OAuth flows and API clients per provider (Google Drive, Slack, HubSpot) |
-| **authorization** | `app/authorization/` | OAuth 2.1 proxy — authorizes MCP clients, handles provider callbacks |
-| **shared** | `app/shared/` | Infrastructure kernel (Redis factory, AsyncClient, base exceptions) |
+- Python 3.13+
+- [uv](https://docs.astral.sh/uv/) (Python package manager)
+- [just](https://github.com/casey/just) (task runner)
+- Docker & Docker Compose
 
-**Dependency rule:** `gateway` → `identity` + `integrations` → `shared`. Contexts never import each other laterally.
+### Installation
 
-## Domain Glossary
+```bash
+# Clone repository
+git clone https://github.com/yourusername/mcp-agent-gateway.git
+cd mcp-agent-gateway
 
-| Term | Meaning |
-|---|---|
-| `RegisteredClient` | An MCP client enrolled via RFC 7591 Dynamic Client Registration |
-| `AccessGuard` | Middleware that validates downstream Bearer tokens (RFC 8707 audience binding) |
-| `enroll_mcp_client()` | Registers a new MCP client with the Authorization Server via DCR |
-| `UpstreamProvider` | Abstract interface for external OAuth providers (Google, Slack, HubSpot) |
-| `get_valid_google_token()` | Returns a live Google access token, auto-refreshing via Fernet-encrypted refresh token |
+# Install dependencies
+just deps
 
-## Adding a New Upstream Provider
+# Start Keycloak + Redis
+just docker-up
 
-To add a new provider (e.g., Notion):
+# Start development server
+just dev
+```
 
-1. Create `app/integrations/notion/` with three files:
-   - `oauth_flow.py` — PKCE flow, authorization URL, callback handler
-   - `token_store.py` — Fernet-encrypted token persistence and auto-refresh
-   - `notion_client.py` — httpx calls to Notion API
-2. Add routes to `app/authorization/router.py` for `/auth/notion/initiate` and `/auth/notion/callback`
-3. Add MCP tools to `app/gateway/tools/notion_tools.py`
+Server runs at http://localhost:8000  
+Keycloak admin at http://localhost:8080 (admin/admin)  
+MCP endpoint at http://localhost:8000/mcp/
 
-No other Bounded Context needs to change.
+### First Request
 
-## Tools
+```bash
+# Get JWT from Keycloak (example)
+TOKEN=$(curl -s -X POST http://localhost:8080/realms/master/protocol/openid-connect/token \
+  -d "grant_type=password" \
+  -d "client_id=admin-cli" \
+  -d "username=admin" \
+  -d "password=admin" | jq -r .access_token)
 
-| Tool | Provider | When to use | What it answers |
-|---|---|---|---|
-| `hubspot_get_meeting_briefing` | HubSpot | Pre-meeting (15 min before) | "What do I need to know about this contact right now?" |
-| `hubspot_list_stalled_deals` | HubSpot | Daily pipeline alert | "Which deals are stuck and about to miss their close date?" |
-| `hubspot_log_meeting_outcome` | HubSpot | Post-meeting | "Log it: outcome was X, next step is Y" |
-| `drive_search_files` | Google Drive | Any moment | Find a file by query string within the user's Drive |
-| `drive_get_file_content` | Google Drive | Reading a proposal or contract | Read file content, auto-exports native Google Docs |
-| `drive_list_recent` | Google Drive | Meeting context | Files modified in the last N days |
-| `slack_send_message` | Slack | Pipeline notification | Send an alert or summary to the team channel |
-| `slack_search_messages` | Slack | Negotiation history | Search past conversations about a customer or deal |
+# Call a tool
+curl -X POST http://localhost:8000/mcp/ \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "tools/call",
+    "params": {
+      "name": "drive-search-files",
+      "arguments": {"query": "contract", "max_results": 10}
+    },
+    "id": 1
+  }'
+```
 
-## Stack
+## Available Tools
 
-FastAPI · MCP Python SDK · Streamable HTTP transport · OAuth 2.1 · Keycloak · httpx · Redis · Fernet · tiktoken · OpenTelemetry · Docker · Kubernetes · GitHub Actions
+### Google Drive Integration
 
-## Design Decisions & Trade-offs
+| Tool | Description | Example Use Case |
+|------|-------------|------------------|
+| `drive-search-files` | Search files by query | "Find the contract for Acme Corp" |
+| `drive-get-file-content` | Download file content | "Read the Q3 report" |
+| `drive-list-recent` | List recently modified files | "Show me what changed this week" |
 
-**Streamable HTTP vs stdio**
-stdio requires the client to launch the server as a subprocess — no multi-client support, no integrated OAuth. A corporate gateway needs neither constraint.
+### Slack Integration
 
-**External Authorization Server (Keycloak) vs roll-your-own**
-Writing an AS conformant with OAuth 2.1 + PKCE + RFC 8707 + RFC 9728 is a separate week-long project. Keycloak is a defensible production choice and keeps the gateway code focused on the MCP layer.
+| Tool | Description | Example Use Case |
+|------|-------------|------------------|
+| `slack-send-message` | Send message to channel | "Notify #sales about new lead" |
+| `slack-search-messages` | Search message history | "Find discussions about Project X" |
 
-**Fernet vs AES-GCM**
-Fernet includes a timestamp and prevents nonce reuse by construction. AES-GCM requires managing IV generation and authentication tags manually — more surface area for misuse.
+### Async Jobs
 
-**Redis Streams vs Celery**
-Celery is sync-first and adds a separate broker. Redis Streams reuses infrastructure already required for rate limiting and token storage, and integrates naturally with async Python.
-
-**Token bucket vs sliding window rate limiting**
-Token bucket has predictable burst behavior and constant memory per user. Sliding window is more accurate but requires storing per-request timestamps in Redis.
-
-**`HttpClient` class + FastAPI `Depends` vs module-level singleton**
-`shared/http_client.py` exposes a class (`HttpClient`) rather than a bare `_client` global. The instance is created in the FastAPI lifespan, stored in `app.state`, and injected into endpoints via `Depends(get_http_client)`. No `global` keyword, no module-level state. In tests, `app.dependency_overrides[get_http_client]` replaces the real client without patching internals.
-
-**`DriveClient` class with lazy `.get()` in handlers vs closure/partial injection**
-`drive_client` follows the same class pattern but lives in the MCP layer, which has no `Request` object and therefore no FastAPI DI. Handlers call `drive_client.get()` at call time (lazy) rather than receiving the client at construction. This keeps the registry a plain `dict` built at import time and avoids coupling handler construction to the lifespan order.
+| Tool | Description | Example Use Case |
+|------|-------------|------------------|
+| `job-enqueue` | Enqueue long-running task | "Export large file to Drive" |
+| `job-status` | Check job status | "Is the export done?" |
+| `job-result` | Retrieve job result | "Get the export URL" |
 
 ## Security
 
-- **Confused Deputy**: downstream and upstream OAuth flows are fully isolated. The client's JWT is never forwarded to Google, Slack, or HubSpot.
-- **Token passthrough**: explicitly prohibited by MCP spec 2025-11-25. Each provider receives a token issued for its own audience.
-- **Audience binding (RFC 8707)**: the `aud` claim of every incoming JWT is validated against the gateway's canonical URI.
-- **DNS rebinding**: `Origin` header validated on all MCP requests per spec requirement.
-- **Webhook replay**: HMAC validation + 5-minute timestamp window + Redis `SETNX` idempotency.
+### Authentication & Authorization
 
-## Running locally
+- **OAuth 2.1 + RFC 9728** (Protected Resource Metadata): standardized discovery for protected resources
+- **JWT validation**: RS256 signatures, issuer/audience verification
+- **Downstream/upstream separation**: client JWT never forwarded to Google/Slack (Confused Deputy prevention)
+- **Dynamic Client Registration**: RFC 7591 for automated client onboarding
+
+### Data Protection
+
+- **Token encryption at rest**: Fernet symmetric encryption for refresh tokens
+- **Per-integration keys**: each service has its own encryption secret
+- **Defense in depth**: even if Redis is compromised, tokens remain encrypted
+
+### Rate Limiting & Abuse Prevention
+
+- **Redis-backed sliding window**: atomic operations prevent race conditions
+- **100 requests/minute per user**: configurable via environment variables
+- **429 Too Many Requests**: with `Retry-After` header
+
+### Audit & Compliance
+
+- **Usage tracking**: every tool call logged to Redis Streams
+- **Structured logging**: JSON logs with request IDs for tracing
+- **Security headers**: HSTS, X-Frame-Options, CSP, etc.
+- **Origin guard**: CORS restricted to trusted origins
+
+### Dependency Security
+
+- **pip-audit**: scans for known vulnerabilities in dependencies
+- **bandit**: static analysis for security issues
+- **CI enforcement**: both run in GitHub Actions pipeline
+
+## Adding a 3rd Integration (e.g., HubSpot)
+
+The gateway is designed to be extensible. To add a new integration:
+
+### 1. Create Integration Module
 
 ```bash
-# Start dependencies
-docker compose -f docker-compose.local.yml up -d
-
-# Run the gateway
-uv run fastapi dev app/main.py
+# Directory structure
+app/integrations/hubspot/
+├── __init__.py
+├── oauth_flow.py      # OAuth 2.1 flow (authorization URL, callback handler)
+├── token_store.py     # Token persistence (Redis + Fernet encryption)
+└── hubspot_client.py  # API client (httpx + retry logic)
 ```
 
-## Known gaps
-
-**`OAuthRefreshError` not handled in Drive tool handlers** (`gateway/tools/drive_tools.py`)
-
-`_get_drive_token()` only catches `OAuthTokenNotFoundError` (user never authorized). If the user's Google refresh token is revoked — e.g. they removed the app from their Google account — `get_valid_google_token` raises `OAuthRefreshError`, which propagates out of the handler as an unhandled exception and surfaces to the LLM as a 500 instead of a clean error message.
-
-Fix: catch `OAuthRefreshError` in `_get_drive_token()` alongside `OAuthTokenNotFoundError`:
+### 2. Implement the UpstreamProvider Contract
 
 ```python
-async def _get_drive_token() -> str | types.CallToolResult:
-    try:
-        return await get_valid_google_token(current_user_id.get(), _redis_client.get(), _drive_client.get())
-    except OAuthTokenNotFoundError:
-        return _error(_NOT_AUTHORIZED)
-    except OAuthRefreshError:
-        return _error("Google access was revoked. Call POST /auth/google/initiate to re-authorize.")
+# app/integrations/hubspot/hubspot_client.py
+from app.integrations.base import UpstreamProvider
+
+class HubSpotClient(UpstreamProvider):
+    def __init__(self, user_id: str):
+        self.user_id = user_id
+        self.token_store = HubSpotTokenStore(user_id)
+
+    async def get_valid_token(self) -> str:
+        return await self.token_store.get_valid_token()
 ```
 
-The same gap would appear in any future provider that implements a refresh flow.
+### 3. Create Tools
+
+```python
+# app/gateway/tools/hubspot_tools.py
+from app.gateway.server import mcp
+
+@mcp.tool()
+async def hubspot_get_contact(email: str) -> dict:
+    """Get contact details from HubSpot."""
+    client = HubSpotClient(current_user_id.get())
+    token = await client.get_valid_token()
+    return await http_client.get(f"https://api.hubapi.com/contacts/{email}", headers={"Authorization": f"Bearer {token}"})
+```
+
+### 4. Register OAuth Endpoints
+
+```python
+# app/authorization/router.py
+@router.post("/auth/hubspot/initiate")
+async def initiate_hubspot_auth(...):
+    return hubspot_oauth_flow.initiate(...)
+
+@router.get("/auth/hubspot/callback")
+async def hubspot_callback(...):
+    return await hubspot_oauth_flow.handle_callback(...)
+```
+
+### 5. Add Configuration
+
+```bash
+# .env
+HUBSPOT_CLIENT_ID=your_client_id
+HUBSPOT_CLIENT_SECRET=your_client_secret
+HUBSPOT_TOKEN_ENCRYPTION_KEY=fernet_key_here
+```
+
+### 6. Test
+
+```python
+# tests/integrations/hubspot/test_hubspot_client.py
+async def test_hubspot_get_contact():
+    client = HubSpotClient("user-123")
+    result = await client.get_valid_token()
+    assert isinstance(result, str)
+```
+
+## Design Decisions
+
+### 1. Redis vs In-Memory Stores
+
+**Choice:** Redis for rate limiting, usage tracking, and token storage
+
+**Rationale:**
+- **Production-ready**: supports horizontal scaling (multiple gateway instances)
+- **Atomic operations**: Lua scripts prevent race conditions in rate limiting
+- **Persistence**: data survives restarts (important for usage analytics)
+- **Streams**: native support for append-only logs (usage tracking)
+
+**Trade-off:** Adds operational complexity vs simple in-memory dicts
+
+### 2. OAuth 2.1 + RFC 9728 vs Custom Auth
+
+**Choice:** Standards-compliant OAuth 2.1 with Protected Resource Metadata
+
+**Rationale:**
+- **Interoperability**: any MCP client can connect
+- **Security**: spec audited by community, prevents token replay
+- **Production-ready**: Keycloak as authorization server (battle-tested)
+
+**Trade-off:** More complex setup vs simple API keys
+
+### 3. Two Separate OAuth Flows
+
+**Choice:** Downstream (client → gateway) and upstream (gateway → Drive/Slack) are completely separate
+
+**Rationale:**
+- **Confused Deputy prevention**: downstream JWT never forwarded to upstream APIs
+- **Scope isolation**: each integration has its own OAuth scope
+- **Audit clarity**: clear separation of "who asked" vs "what was accessed"
+
+**Trade-off:** Users must authorize twice (once for gateway, once for each integration)
+
+### 4. Fernet Encryption vs Plaintext
+
+**Choice:** Fernet symmetric encryption for refresh tokens
+
+**Rationale:**
+- **Defense in depth**: even if Redis is compromised, tokens are encrypted
+- **Authenticated encryption**: prevents tampering
+- **Simple key management**: one key per integration
+
+**Trade-off:** Slight performance overhead vs plaintext storage
+
+### 5. Sliding Window vs Fixed Window Rate Limiting
+
+**Choice:** Sliding window algorithm (Redis-backed)
+
+**Rationale:**
+- **Fairness**: prevents burst at window boundaries
+- **Predictable**: smooth rate limiting over time
+- **Atomic**: Lua script ensures consistency
+
+**Trade-off:** More complex implementation vs fixed window (simple counter)
+
+### 6. Redis Streams vs Logs for Usage Tracking
+
+**Choice:** Redis Streams for usage tracking
+
+**Rationale:**
+- **Real-time analytics**: can query recent usage without log parsing
+- **Retention policies**: automatic cleanup of old data
+- **Consumer groups**: multiple services can process the same stream
+
+**Trade-off:** Requires Redis vs writing to stdout/files
+
+## Development
+
+```bash
+# Run tests
+just test
+
+# Run tests with coverage
+just test-cov
+
+# Lint and format
+just lint
+
+# Run full CI pipeline
+just ci
+
+# Start Docker services
+just docker-up
+
+# Check service health
+just health
+
+# Run security scanners
+just security
+```
+
+## Testing
+
+- **184 tests** passing
+- **90% code coverage**
+- **Integration tests** with respx (HTTP mocking)
+- **Security tests** including Confused Deputy proof
+
+See `COVERAGE.md` for detailed coverage report.
+
+## Deployment
+
+### Docker
+
+```bash
+docker build -t mcp-agent-gateway .
+docker run -p 8000:8000 mcp-agent-gateway
+```
+
+### Environment Variables
+
+```bash
+# Required
+REDIS_URL=redis://localhost:6379
+OAUTH_ISSUER_URL=http://localhost:8080/realms/master
+OAUTH_EXPECTED_AUDIENCE=mcp-gateway
+GATEWAY_BASE_URL=http://localhost:8000
+
+# Google Drive
+GOOGLE_CLIENT_ID=your_client_id
+GOOGLE_CLIENT_SECRET=your_client_secret
+GOOGLE_TOKEN_ENCRYPTION_KEY=fernet_key_here
+GOOGLE_REDIRECT_URI=http://localhost:8000/auth/google/callback
+
+# Slack
+SLACK_CLIENT_ID=your_client_id
+SLACK_CLIENT_SECRET=your_client_secret
+SLACK_TOKEN_ENCRYPTION_KEY=fernet_key_here
+SLACK_REDIRECT_URI=http://localhost:8000/auth/slack/callback
+```
+
+## Project Structure
+
+```
+app/
+├── app/
+│   ├── main.py                         # FastAPI application bootstrap
+│   ├── config.py                       # Pydantic settings
+│   ├── logging.py                      # Structured logging config
+│   ├── authorization/
+│   │   └── router.py                   # OAuth endpoints (authorize, callbacks)
+│   ├── identity/
+│   │   ├── token_validator.py          # JWT validation (RS256, JWKS)
+│   │   ├── jwks_client.py             # JWKS client with TTL cache
+│   │   ├── protected_resource.py      # RFC 9728 metadata endpoint
+│   │   └── client_registration/       # DCR (RFC 7591)
+│   ├── gateway/
+│   │   ├── server.py                   # MCP session manager
+│   │   ├── mcp.py                      # MCP ASGI app + lifespan
+│   │   ├── event_store.py             # Event replay for resumability
+│   │   ├── health.py                   # Health check endpoint
+│   │   ├── jobs.py                     # Async job queue
+│   │   ├── job_worker.py              # Job worker process
+│   │   ├── usage.py                    # Usage tracking logic
+│   │   ├── usage_router.py            # Usage stats API
+│   │   ├── webhooks_router.py         # Webhook endpoints
+│   │   ├── middleware/
+│   │   │   ├── access_guard.py        # Bearer JWT validation
+│   │   │   ├── rate_limiter.py        # Sliding window rate limit
+│   │   │   ├── request_logger.py      # Request ID + timing
+│   │   │   ├── security_headers.py    # HSTS, CSP, etc.
+│   │   │   └── origin_guard.py        # CORS validation
+│   │   └── tools/
+│   │       ├── drive_tools.py         # Google Drive MCP tools
+│   │       ├── slack_tools.py         # Slack MCP tools
+│   │       └── job_tools.py           # Async job MCP tools
+│   ├── integrations/
+│   │   ├── base.py                     # UpstreamProvider ABC
+│   │   ├── google/
+│   │   │   ├── drive_client.py        # Google Drive API client
+│   │   │   ├── oauth_flow.py          # Google OAuth 2.1 flow
+│   │   │   ├── token_store.py         # Token persistence (Fernet)
+│   │   │   └── constants.py           # Google API constants
+│   │   └── slack/
+│   │       ├── slack_client.py        # Slack API client
+│   │       ├── oauth_flow.py          # Slack OAuth flow
+│   │       ├── token_store.py         # Token persistence (Fernet)
+│   │       ├── signature.py           # Webhook signature verification
+│   │       └── constants.py           # Slack API constants
+│   └── shared/
+│       ├── store.py                    # RedisStore + token stores
+│       ├── redis.py                    # Redis connection factory
+│       ├── http_client.py             # Shared async HTTP client
+│       ├── exceptions.py              # Domain exceptions
+│       └── dependencies.py            # FastAPI dependencies
+├── tests/                              # Test suite (mirrors app/)
+├── docker-compose.local.yml           # Local development services
+├── docker-compose.production.yml      # Production deployment
+├── Justfile                            # Developer commands
+├── COVERAGE.md                        # Test coverage report
+└── README.md                          # This file
+```
+
+## License
+
+MIT
+
+## Contributing
+
+Contributions welcome! Please:
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Run `just ci` to ensure tests pass
+5. Submit a pull request
 
 ---
 
-## What I'd do next with more time
-
-- Explicit token revocation (Google/Slack/HubSpot logout) and periodic orphan client cleanup via Keycloak management API
-- HubSpot Public App to isolate tokens per rep — currently all users share the private app token; the `UpstreamProvider` module structure stays the same, only `token_store.py` changes
-- Per-user cost dashboard with USD estimates (tiktoken already counts tokens per call, only the UI is missing)
-- Fourth provider to validate the `UpstreamProvider` pattern is truly generic — Notion or Google Calendar would be natural candidates (same OAuth flow as Drive)
+**Built with:** FastAPI, Redis, Keycloak, Google Drive API, Slack API, MCP 2025-11-25

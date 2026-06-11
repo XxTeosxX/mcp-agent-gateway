@@ -1,5 +1,21 @@
 import logging
 import logging.config
+import re
+
+_SENSITIVE_PATTERNS = [
+    (re.compile(r"Bearer\s+\S+", re.IGNORECASE), "Bearer ***"),
+    (re.compile(r"xox[abpr]-\S+"), "xox*-***"),
+    (re.compile(r"1//[\w.\-]+"), "1//***"),
+]
+
+
+class SensitiveDataFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.msg, str):
+            for pattern, replacement in _SENSITIVE_PATTERNS:
+                record.msg = pattern.sub(replacement, record.msg)
+        return True
+
 
 LOGGING_CONFIG: dict = {
     "version": 1,
@@ -29,3 +45,6 @@ LOGGING_CONFIG: dict = {
 
 def configure_logging() -> None:
     logging.config.dictConfig(LOGGING_CONFIG)
+
+    for handler in logging.getLogger().handlers:
+        handler.addFilter(SensitiveDataFilter())

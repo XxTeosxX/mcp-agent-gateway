@@ -1,14 +1,17 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from starlette.middleware.cors import CORSMiddleware
 
 from app.authorization.router import router as authorization_router
 from app.config import settings
 from app.gateway.health import router as health_router
 from app.gateway.mcp import mcp_app, mcp_lifespan
 from app.gateway.middleware.access_guard import AccessGuard
+from app.gateway.middleware.origin_guard import OriginGuardMiddleware
 from app.gateway.middleware.rate_limiter import RateLimiterMiddleware
 from app.gateway.middleware.request_logger import request_logging_middleware
+from app.gateway.middleware.security_headers import SecurityHeadersMiddleware
 from app.gateway.usage_router import router as usage_router
 from app.gateway.webhooks_router import router as webhooks_router
 from app.identity.protected_resource import router as identity_router
@@ -52,7 +55,16 @@ app = FastAPI(
 
 app.add_middleware(RateLimiterMiddleware)
 app.add_middleware(AccessGuard)
+app.add_middleware(OriginGuardMiddleware, allowed_origins=settings.ALLOWED_ORIGINS)
 app.middleware("http")(request_logging_middleware)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.ALLOWED_ORIGINS,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Mcp-Session-Id"],
+)
+app.add_middleware(SecurityHeadersMiddleware)
 app.include_router(health_router)
 app.include_router(identity_router)
 app.include_router(authorization_router)

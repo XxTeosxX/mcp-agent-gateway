@@ -1,3 +1,7 @@
+import os
+import tempfile
+
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -26,6 +30,8 @@ class Settings(BaseSettings):
 
     GATEWAY_BASE_URL: str = "http://localhost:8000"
 
+    ALLOWED_ORIGINS: list[str] = []
+
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
     GOOGLE_TOKEN_ENCRYPTION_KEY: str = ""
@@ -45,7 +51,7 @@ class Settings(BaseSettings):
     SLACK_MAX_RETRIES: int = 3
     SLACK_SIGNING_SECRET: str = ""
 
-    EXPORT_DIR: str = "/tmp/exports"
+    EXPORT_DIR: str = Field(default_factory=lambda: os.path.join(tempfile.gettempdir(), "mcp-exports"))
 
     DCR_REGISTRATION_ENDPOINT: str = ""
     DCR_INITIAL_ACCESS_TOKEN: str = ""

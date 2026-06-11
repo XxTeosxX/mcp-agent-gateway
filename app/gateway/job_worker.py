@@ -29,7 +29,8 @@ class JobWorker:
         self._consumer = f"worker-{os.getenv('HOSTNAME') or socket.gethostname()}-{os.getpid()}"
 
     async def run(self) -> None:
-        os.makedirs(self._export_dir, exist_ok=True)
+        os.makedirs(self._export_dir, mode=0o700, exist_ok=True)
+        os.chmod(self._export_dir, 0o700)
         await ensure_group(self._redis)
         while True:
             try:
@@ -68,6 +69,7 @@ class JobWorker:
             data = await _drive_client.export_file(token, fields["file_id"], export_mime)
             path = os.path.join(self._export_dir, f"{job_id}.{ext}")
             await asyncio.to_thread(Path(path).write_bytes, data)
+            os.chmod(path, 0o600)
             await self._publish(
                 job_id,
                 {

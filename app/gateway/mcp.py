@@ -22,7 +22,8 @@ class MCPApp:
         self._manager = manager
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        assert self._manager is not None, "mcp_app: session manager not initialized"
+        if self._manager is None:
+            raise RuntimeError("mcp_app: session manager not initialized")
         await self._manager.handle_request(scope, receive, send)
 
 
