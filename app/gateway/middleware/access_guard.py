@@ -3,10 +3,18 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
 from app.config import settings
-from app.gateway.context import current_user_id
+from app.gateway.context import current_user_id, current_user_scopes
 from app.identity.token_validator import token_validator
 
 _SCOPES = "mcp:tools:read mcp:tools:write"
+
+# Keycloak client `mcp-gateway` roles → gateway scopes. The role is the source
+# of truth; downstream code reads only scopes.
+_CLIENT_ID = "mcp-gateway"
+_ROLE_SCOPE_MAP = {
+    "drive-user": "mcp:google:read",
+    "slack-user": "mcp:slack:read",
+}
 
 _AUTH_BYPASS_EXACT = frozenset(
     {
@@ -43,12 +51,17 @@ class AccessGuard(BaseHTTPMiddleware):
         except ValueError:
             return self._unauthorized()
 
+        scopes = set(claims.get("scope", "").split())
+        client_roles = claims.get("resource_access", {}).get(_CLIENT_ID, {}).get("roles", [])
+        scopes |= {_ROLE_SCOPE_MAP[r] for r in client_roles if r in _ROLE_SCOPE_MAP}
+
         request.state.user = {
             "id": claims["sub"],
-            "scopes": claims.get("scope", "").split(),
+            "scopes": sorted(scopes),
             "token": claims,
         }
         current_user_id.set(claims["sub"])
+        current_user_scopes.set(frozenset(scopes))
         return await call_next(request)
 
     @staticmethod

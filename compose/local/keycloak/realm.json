@@ -402,6 +402,16 @@
           "containerId": "82b2b5d4-b992-4c2e-afcd-9249dbce115c",
           "attributes": {}
         }
+      ],
+      "mcp-gateway": [
+        {
+          "name": "drive-user",
+          "description": "May use Google Drive tools"
+        },
+        {
+          "name": "slack-user",
+          "description": "May use Slack tools"
+        }
       ]
     }
   },
@@ -474,6 +484,73 @@
       ],
       "notBefore": 0,
       "groups": []
+    },
+    {
+      "id": "4800361d-f6cb-5ade-b732-48809fb1700f",
+      "username": "joao",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "joao@example.com",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "joao-pass",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "default-roles-mcp-gateway"
+      ],
+      "clientRoles": {
+        "mcp-gateway": [
+          "drive-user"
+        ]
+      }
+    },
+    {
+      "id": "5e31ab36-2dd2-5ab2-91b6-4e50064f5750",
+      "username": "maria",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "maria@example.com",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "maria-pass",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "default-roles-mcp-gateway"
+      ],
+      "clientRoles": {
+        "mcp-gateway": [
+          "drive-user",
+          "slack-user"
+        ]
+      }
+    },
+    {
+      "id": "f272c529-d2e0-554f-be9b-639af4aa0d93",
+      "username": "roger",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "roger@example.com",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "roger-pass",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "default-roles-mcp-gateway"
+      ],
+      "clientRoles": {
+        "mcp-gateway": [
+          "slack-user"
+        ]
+      }
     }
   ],
   "scopeMappings": [
@@ -853,6 +930,48 @@
         "organization",
         "offline_access",
         "microprofile-jwt"
+      ]
+    },
+    {
+      "id": "11111111-1111-1111-1111-111111111111",
+      "clientId": "mcp-gateway",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "mcp-gateway-secret",
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "fullScopeAllowed": true,
+      "redirectUris": [],
+      "webOrigins": [],
+      "defaultClientScopes": [
+        "web-origins",
+        "acr",
+        "roles",
+        "profile",
+        "basic",
+        "email"
+      ],
+      "optionalClientScopes": [
+        "address",
+        "phone",
+        "offline_access",
+        "microprofile-jwt"
+      ],
+      "protocolMappers": [
+        {
+          "name": "mcp-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.custom.audience": "http://localhost:8000/mcp/",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        }
       ]
     }
   ],

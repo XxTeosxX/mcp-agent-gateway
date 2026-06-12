@@ -76,6 +76,10 @@ async def handle_wait_for_job(arguments: dict) -> types.CallToolResult:
     return _ok(result)
 
 
+# drive-export-large-file / wait-for-job are async Google Drive capabilities,
+# so they gate on the Drive scope.
+JOB_REQUIRED_SCOPE = "mcp:google:read"
+
 JOB_TOOLS: list[types.Tool] = [
     types.Tool(
         name="drive-export-large-file",

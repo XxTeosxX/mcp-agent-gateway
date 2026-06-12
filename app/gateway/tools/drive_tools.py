@@ -129,6 +129,8 @@ async def handle_drive_list_recent(arguments: dict) -> types.CallToolResult:
     return _ok([_to_drive_file(f) for f in files])
 
 
+DRIVE_REQUIRED_SCOPE = "mcp:google:read"
+
 DRIVE_TOOLS: list[types.Tool] = [
     types.Tool(
         name="drive-search-files",

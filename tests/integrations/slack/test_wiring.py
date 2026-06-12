@@ -1,11 +1,16 @@
 import pytest
 
+from app.gateway.context import current_user_scopes
 from app.gateway.server import handle_list_tools
 
 
 @pytest.mark.asyncio
 async def test_list_tools_includes_slack():
-    names = {t.name for t in await handle_list_tools()}
+    token = current_user_scopes.set(frozenset({"mcp:google:read", "mcp:slack:read"}))
+    try:
+        names = {t.name for t in await handle_list_tools()}
+    finally:
+        current_user_scopes.reset(token)
     assert "slack-send-message" in names
     assert "slack-search-messages" in names
     assert "drive-search-files" in names

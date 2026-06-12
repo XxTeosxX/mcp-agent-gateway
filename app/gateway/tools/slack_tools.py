@@ -108,6 +108,8 @@ async def handle_slack_search_messages(arguments: dict) -> types.CallToolResult:
     return _ok([_to_match(m) for m in matches])
 
 
+SLACK_REQUIRED_SCOPE = "mcp:slack:read"
+
 SLACK_TOOLS: list[types.Tool] = [
     types.Tool(
         name="slack-send-message",
