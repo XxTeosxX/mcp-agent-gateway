@@ -12,7 +12,6 @@ _AUTH_BYPASS_EXACT = frozenset(
     {
         "/openapi.json",
         "/oauth/authorize",
-        "/auth/google/callback",
     }
 )
 

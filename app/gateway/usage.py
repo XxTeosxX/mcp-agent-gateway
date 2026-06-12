@@ -9,11 +9,17 @@ from app.gateway.context import current_user_id
 
 logger = logging.getLogger("app.usage")
 
-_ENCODING = tiktoken.get_encoding("cl100k_base")
+
+@functools.cache
+def _get_encoding() -> "tiktoken.Encoding":
+    # Loaded lazily on first token count, not at import. tiktoken fetches the
+    # BPE encoding (cached after first load), so deferring keeps startup working
+    # offline and only pays the cost if usage tracking actually runs.
+    return tiktoken.get_encoding("cl100k_base")
 
 
 def count_tokens(text: str) -> int:
-    return len(_ENCODING.encode(text))
+    return len(_get_encoding().encode(text))
 
 
 async def record_usage(redis, user_id: str, tool: str, in_tokens: int, out_tokens: int) -> None:

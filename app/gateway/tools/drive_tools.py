@@ -5,10 +5,13 @@ from collections.abc import Awaitable, Callable
 from mcp import types
 from pydantic import BaseModel, Field, ValidationError
 
-from app.gateway.context import current_user_id
 from app.gateway.usage import track_usage
 from app.integrations.google.drive_client import drive_client as _drive_client
-from app.integrations.google.token_store import OAuthTokenNotFoundError, get_valid_google_token
+from app.integrations.google.token_store import (
+    _GOOGLE_SHARED_USER,
+    OAuthTokenNotFoundError,
+    get_valid_google_token,
+)
 from app.shared.store import token_store
 
 logger = logging.getLogger(__name__)
@@ -66,12 +69,17 @@ def _to_drive_file(f: dict) -> dict:
     ).model_dump()
 
 
-_NOT_AUTHORIZED = "Google not authorized. Call POST /auth/google/initiate to authorize your account."
+# All gateway-authenticated users share one upstream Google token
+# (_GOOGLE_SHARED_USER), provisioned via GOOGLE_SHARED_REFRESH_TOKEN. The
+# downstream user's identity is NEVER forwarded to Google (Confused Deputy).
+_NOT_AUTHORIZED = (
+    "Google Drive is not authorized. Provision a shared refresh token via GOOGLE_SHARED_REFRESH_TOKEN (see README)."
+)
 
 
 async def _get_drive_token() -> str | types.CallToolResult:
     try:
-        return await get_valid_google_token(current_user_id.get(), _drive_client.get(), token_store.get())
+        return await get_valid_google_token(_GOOGLE_SHARED_USER, _drive_client.get(), token_store.get())
     except OAuthTokenNotFoundError:
         return _error(_NOT_AUTHORIZED)
 

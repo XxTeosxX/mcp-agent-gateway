@@ -10,6 +10,7 @@ from app.gateway.jobs import job_queue
 from app.gateway.server import create_session_manager
 from app.gateway.usage import usage_recorder
 from app.integrations.google.drive_client import drive_client
+from app.integrations.google.token_store import seed_shared_token_if_absent
 from app.integrations.slack.slack_client import slack_client
 from app.shared.store import RedisStore, slack_token_store, token_store
 
@@ -37,6 +38,7 @@ async def mcp_lifespan(redis) -> AsyncIterator[None]:
     drive_client.init()
     slack_client.init()
     token_store.init(RedisStore(redis, "token:"))
+    await seed_shared_token_if_absent(token_store.get())
     slack_token_store.init(RedisStore(redis, "slack:token:"))
     usage_recorder.init(redis)
     job_queue.init(redis)

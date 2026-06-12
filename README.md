@@ -112,6 +112,40 @@ itself, so the protocol traffic is authenticated like everything else.
 | `drive-list-recent` | List recently modified files |
 | `drive-export-large-file` | Enqueue a large export as an async job |
 
+> [!NOTE]
+> **One-time human consent is required — by design, because this runs against a
+> free @gmail.com account.** Google only lets apps skip per-user consent through
+> domain-wide delegation (Workspace-only), and a service account on a consumer
+> account can't see the owner's Drive root. So a one-time OAuth consent from the
+> owner is unavoidable — but it happens out-of-band in `gcloud`, not in the gateway.
+>
+> Consent is not the same as sharing the password: the owner grants scoped,
+> read-only (`drive.readonly`), revocable access once, and the gateway only ever
+> stores an encrypted refresh token in Redis.
+>
+> **Provisioning (once):**
+>
+> ```bash
+> # Build the client-id-file from the env vars already in your .env — no download needed.
+> echo "{\"installed\":{\"client_id\":\"$GOOGLE_CLIENT_ID\",\"client_secret\":\"$GOOGLE_CLIENT_SECRET\",\"redirect_uris\":[\"http://localhost\"],\"auth_uri\":\"https://accounts.google.com/o/oauth2/auth\",\"token_uri\":\"https://oauth2.googleapis.com/token\"}}" \
+>   > google_oauth_client.json
+>
+> # The refresh token MUST be issued to the SAME OAuth client the gateway refreshes
+> # with (GOOGLE_CLIENT_ID/SECRET) — Desktop-type client supports the loopback flow gcloud uses.
+> gcloud auth application-default login \
+>   --client-id-file=google_oauth_client.json \
+>   --scopes=https://www.googleapis.com/auth/drive.readonly,https://www.googleapis.com/auth/cloud-platform
+>
+> rm google_oauth_client.json
+>
+> # Copy the refresh_token from the saved ADC file into .env:
+> python3 -c "import json,pathlib; d=json.loads(pathlib.Path('~/.config/gcloud/application_default_credentials.json').expanduser().read_text()); print('GOOGLE_SHARED_REFRESH_TOKEN=' + d['refresh_token'])"
+> ```
+>
+> On boot the gateway seeds `token:google:shared` from `GOOGLE_SHARED_REFRESH_TOKEN`
+> (only if absent), and `get_valid_google_token` refreshes it on the first Drive
+> call. After that, any gateway-authenticated user can use the Drive tools.
+
 ### Slack
 | Tool | Does |
 |---|---|

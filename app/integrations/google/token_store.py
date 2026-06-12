@@ -8,6 +8,8 @@ from app.config import settings
 from app.integrations.google.constants import GOOGLE_TOKEN_URL
 from app.shared.store import Store
 
+_GOOGLE_SHARED_USER = "google:shared"
+
 
 def _fernet() -> Fernet:
     return Fernet(settings.GOOGLE_TOKEN_ENCRYPTION_KEY.encode())
@@ -19,22 +21,6 @@ class OAuthTokenNotFoundError(Exception):
 
 class OAuthRefreshError(Exception):
     pass
-
-
-async def persist_tokens(user_id: str, tokens: dict, store: Store) -> None:
-    refresh_token = tokens["refresh_token"]
-    refresh_token_enc = _fernet().encrypt(refresh_token.encode()).decode()
-    expires_at = time.time() + tokens.get("expires_in", 3600)
-    await store.set(
-        user_id,
-        json.dumps(
-            {
-                "access_token": tokens["access_token"],
-                "refresh_token_enc": refresh_token_enc,
-                "expires_at": expires_at,
-            }
-        ),
-    )
 
 
 async def get_valid_google_token(user_id: str, http_client: httpx.AsyncClient, store: Store) -> str:
@@ -73,3 +59,28 @@ async def get_valid_google_token(user_id: str, http_client: httpx.AsyncClient, s
     await store.set(user_id, json.dumps(data))
 
     return data["access_token"]
+
+
+async def seed_refresh_token(refresh_token: str, store: Store) -> None:
+    """Persist a bare refresh token so the next Drive call triggers a refresh.
+
+    Stores expires_at=0 (already expired) and an empty access_token, so
+    get_valid_google_token refreshes against Google on first use.
+    """
+    refresh_token_enc = _fernet().encrypt(refresh_token.encode()).decode()
+    await store.set(
+        _GOOGLE_SHARED_USER,
+        json.dumps({"access_token": "", "refresh_token_enc": refresh_token_enc, "expires_at": 0}),
+    )
+
+
+async def seed_shared_token_if_absent(store: Store) -> None:
+    """Seed token:google:shared from settings.GOOGLE_SHARED_REFRESH_TOKEN.
+
+    No-op when the env var is empty or a token already exists (rotation-safe).
+    """
+    if not settings.GOOGLE_SHARED_REFRESH_TOKEN:
+        return
+    if await store.get(_GOOGLE_SHARED_USER) is not None:
+        return
+    await seed_refresh_token(settings.GOOGLE_SHARED_REFRESH_TOKEN, store)

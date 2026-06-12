@@ -17,10 +17,19 @@ services:
       # itself, not another service. Use compose service names.
       REDIS_URL: redis://valkey:6379
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
-      # NOTE (Keycloak hostname): the token `iss` claim must equal OAUTH_ISSUER_URL.
-      # With `start-dev` the issuer is request-host derived. To reach Keycloak from
-      # this container AND keep issuers consistent, add `127.0.0.1 keycloak` to your
-      # host /etc/hosts and set OAUTH_ISSUER_URL=http://keycloak:8080/realms/mcp-gateway.
+      # Public issuer — must match the `iss` Keycloak stamps (pinned via KC_HOSTNAME
+      # below) and be reachable by the browser during the OAuth redirect, hence
+      # `localhost`. Used for `iss` validation and browser-facing AS metadata.
+      OAUTH_ISSUER_URL: http://localhost:8080/realms/mcp-gateway
+      # Internal realm base for JWKS fetch — the gateway can't reach `localhost:8080`
+      # (that's itself), so keys are fetched over the compose network at `keycloak`.
+      OAUTH_JWKS_URL: http://keycloak:8080/realms/mcp-gateway
+      # tiktoken downloads the BPE encoding from the internet on first use.
+      # Point it at a vendored cache (see .tiktoken_cache/) so startup works
+      # without egress.
+      TIKTOKEN_CACHE_DIR: /app/.tiktoken_cache
+      # GOOGLE_SHARED_REFRESH_TOKEN is read from .env (env_file above) and seeds
+      # token:google:shared at boot — no in-gateway OAuth flow.
     ports:
       - "8000:8000"
     command: /start
@@ -48,11 +57,29 @@ services:
       KC_BOOTSTRAP_ADMIN_USERNAME: admin
       KC_BOOTSTRAP_ADMIN_PASSWORD: admin
       KC_HTTP_PORT: 8080
+      # Pin the issuer so tokens carry a stable `iss` regardless of which host
+      # (localhost from the browser/host, keycloak from the compose network)
+      # reached Keycloak. Must equal the gateway's OAUTH_ISSUER_URL above.
+      KC_HOSTNAME: http://localhost:8080
+      # Health endpoints (KC 26) live on the management port 9000, and are off by
+      # default — must be explicitly enabled.
+      KC_HEALTH_ENABLED: "true"
+      # Substituted into realm.json's mcp-test client `secret` at import time.
+      # Local-dev throwaway; override from the shell for anything shared.
+      KC_MCP_TEST_SECRET: ${KC_MCP_TEST_SECRET:-local-dev-only-not-secret}
     ports:
       - "8080:8080"
-    command: start-dev
+    # Auto-import the mcp-gateway realm (realm + mcp-test client + audience mapper)
+    # on boot so the stack is usable after a fresh `up` without manual kcadm steps.
+    volumes:
+      - ./compose/local/keycloak:/opt/keycloak/data/import:ro
+    command: start-dev --import-realm
+    # KC 26 distroless image ships no curl/wget, so probe /health/ready on the
+    # management port (9000) using bash's /dev/tcp builtin.
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health/ready || exit 1"]
+      test:
+        - CMD-SHELL
+        - 'exec 3<>/dev/tcp/localhost/9000; printf "GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" >&3; grep -q "200 OK" <&3'
       interval: 10s
       timeout: 5s
       retries: 10
@@ -60,11 +87,11 @@ services:
 
   # OTLP trace collector + UI (http://localhost:16686). Target for the gateway's
   # OpenTelemetry export; tracing degrades gracefully if this service is absent.
+  # Jaeger v2 (single `jaeger` binary) — OTLP receiver is enabled by default,
+  # so the v1 COLLECTOR_OTLP_ENABLED flag is no longer required.
   jaeger:
-    image: jaegertracing/all-in-one:1.62
+    image: jaegertracing/jaeger:2.19.0
     container_name: mcp_agent_gateway_local_jaeger
-    environment:
-      COLLECTOR_OTLP_ENABLED: "true"
     ports:
       - "16686:16686"
       - "4318:4318"

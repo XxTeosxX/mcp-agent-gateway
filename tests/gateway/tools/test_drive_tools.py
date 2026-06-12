@@ -42,7 +42,7 @@ async def stored_token(encryption_key):
     key = settings.GOOGLE_TOKEN_ENCRYPTION_KEY.encode()
     enc = Fernet(key).encrypt(b"fake-refresh-token").decode()
     await token_store.get().set(
-        "user-123",
+        "google:shared",
         json.dumps(
             {
                 "access_token": "valid-access-token",

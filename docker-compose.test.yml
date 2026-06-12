@@ -1,0 +1,30 @@
+# Validation override for test-api.sh. Provisions a Keycloak realm
+# (mcp-gateway) with a service-account client so the script can mint a
+# client_credentials JWT, and pins the issuer so the token `iss` is stable
+# regardless of which host requested it.
+#
+# Use together with the base + dns fix:
+#   docker compose -f docker-compose.local.yml \
+#                  -f docker-compose.dnsfix.yml \
+#                  -f docker-compose.test.yml up -d
+#
+# Then:
+#   CLIENT_ID=test-client CLIENT_SECRET=test-secret \
+#   KEYCLOAK_TOKEN_URL=http://localhost:8080/realms/mcp-gateway/protocol/openid-connect/token \
+#   ./test-api.sh
+
+services:
+  keycloak:
+    # Fixed frontend URL → token `iss` is always http://keycloak:8080/realms/...
+    # which matches the gateway's OAUTH_ISSUER_URL below. JWKS is then fetched
+    # from the same host (resolved via the dnsfix extra_hosts entry).
+    environment:
+      KC_HOSTNAME: http://keycloak:8080
+      KC_HOSTNAME_STRICT: "false"
+    command: start-dev --import-realm
+    volumes:
+      - ./compose/local/keycloak/realm-mcp-gateway.json:/opt/keycloak/data/import/realm-mcp-gateway.json:ro
+
+  fastapi:
+    environment:
+      OAUTH_ISSUER_URL: http://keycloak:8080/realms/mcp-gateway

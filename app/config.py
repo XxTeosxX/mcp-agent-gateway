@@ -25,8 +25,18 @@ class Settings(BaseSettings):
     RATE_LIMIT_WINDOW_SECONDS: int = 60
 
     OAUTH_ISSUER_URL: str = "http://localhost:8080/realms/mcp-gateway"
+    # Realm base used to fetch JWKS. Decoupled from OAUTH_ISSUER_URL so the
+    # gateway can validate the public `iss` (e.g. localhost) while fetching keys
+    # over the internal network (e.g. keycloak:8080) in docker-compose. Empty =>
+    # falls back to OAUTH_ISSUER_URL, which is the correct shape for production.
+    OAUTH_JWKS_URL: str = ""
     OAUTH_EXPECTED_AUDIENCE: str = "http://localhost:8000/mcp/"
     OAUTH_JWKS_CACHE_TTL: int = 3600
+
+    @property
+    def jwks_uri(self) -> str:
+        base = self.OAUTH_JWKS_URL or self.OAUTH_ISSUER_URL
+        return f"{base}/protocol/openid-connect/certs"
 
     GATEWAY_BASE_URL: str = "http://localhost:8000"
 
@@ -35,7 +45,9 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
     GOOGLE_TOKEN_ENCRYPTION_KEY: str = ""
-    GOOGLE_REDIRECT_URI: str = "http://localhost:8000/auth/google/callback"
+    # Shared Drive refresh token, provisioned out-of-band (gcloud). Seeded into
+    # token:google:shared at boot. Must be issued to GOOGLE_CLIENT_ID/SECRET.
+    GOOGLE_SHARED_REFRESH_TOKEN: str = ""
 
     GOOGLE_DRIVE_TIMEOUT: float = 10.0
     GOOGLE_DRIVE_MAX_CONNECTIONS: int = 100

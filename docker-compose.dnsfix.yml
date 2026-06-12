@@ -1,0 +1,36 @@
+# Sandbox-only override. The Docker embedded DNS (127.0.0.1:53 at 127.0.0.11)
+# is broken in this environment, so cross-container name resolution fails
+# ("Temporary failure in name resolution" for valkey/keycloak/jaeger).
+#
+# Workaround: pin each backing service to a static IP and inject /etc/hosts
+# entries into the fastapi container via extra_hosts. NOT for normal use —
+# only merge this with `-f` when the host's Docker DNS is non-functional:
+#   docker compose -f docker-compose.local.yml -f docker-compose.dnsfix.yml up -d
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/16
+
+services:
+  valkey:
+    networks:
+      default:
+        ipv4_address: 172.30.0.4
+
+  keycloak:
+    networks:
+      default:
+        ipv4_address: 172.30.0.2
+
+  jaeger:
+    networks:
+      default:
+        ipv4_address: 172.30.0.3
+
+  fastapi:
+    extra_hosts:
+      - "valkey:172.30.0.4"
+      - "keycloak:172.30.0.2"
+      - "jaeger:172.30.0.3"

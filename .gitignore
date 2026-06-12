@@ -1,6 +1,7 @@
 # Environment
 .env
 .env.local
+google_oauth_client.json
 
 # Python
 __pycache__/
@@ -26,5 +27,13 @@ Thumbs.db
 .coverage
 test-api.sh
 
+# Markdown docs (only README.md tracked)
+*.md
+!README.md
+
 # Private notes (interview prep)
 PRIVATE_NOTES.md
+
+# Runtime caches
+.ast-cache/
+.tiktoken_cache/
