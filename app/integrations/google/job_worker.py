@@ -19,6 +19,10 @@ from app.integrations.google.token_store import get_valid_google_token, token_st
 logger = logging.getLogger("app.jobs")
 
 _RECLAIM_IDLE_MS = 60_000
+# Fallback throttle for the idle path. On real Redis, xreadgroup(block=...)
+# already paces the loop; this only matters if BLOCK returns immediately
+# (e.g. a backend that ignores BLOCK), preventing a 100% CPU busy-loop.
+_IDLE_SLEEP_SECONDS = 0.1
 
 
 class JobWorker:
@@ -33,12 +37,17 @@ class JobWorker:
         await ensure_group(self._redis)
         while True:
             try:
+                did_work = False
                 for entry_id, fields in await self._reclaim():
                     await self._process(entry_id, fields)
+                    did_work = True
                 resp = await self._redis.xreadgroup(GROUP, self._consumer, {JOBS_STREAM: ">"}, count=1, block=5000)
                 if resp:
                     for entry_id, fields in resp[0][1]:
                         await self._process(entry_id, fields)
+                        did_work = True
+                if not did_work:
+                    await asyncio.sleep(_IDLE_SLEEP_SECONDS)
             except asyncio.CancelledError:
                 raise
             except Exception:

@@ -52,15 +52,11 @@ class DriveClient:
     async def search_files(
         self,
         token: str,
-        query: str,
+        q: str,
         max_results: int,
-        mime_type: str | None,
     ) -> list[dict]:
         @_retryable()
         async def _call() -> list[dict]:
-            q = query
-            if mime_type:
-                q = f"{q} and mimeType='{mime_type}'"
             resp = await self.get().get(
                 "/drive/v3/files",
                 headers=self._auth(token),

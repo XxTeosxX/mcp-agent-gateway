@@ -40,7 +40,7 @@ async def test_search_files_returns_list():
         )
     )
 
-    result = await drive_client.search_files(token="fake-token", query="proposal", max_results=10, mime_type=None)
+    result = await drive_client.search_files(token="fake-token", q="fullText contains 'proposal'", max_results=10)
 
     assert len(result) == 1
     assert result[0]["id"] == "abc123"
@@ -49,19 +49,19 @@ async def test_search_files_returns_list():
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_search_files_with_mime_type_filter():
+async def test_search_files_passes_q_through_unchanged():
     respx.get("https://www.googleapis.com/drive/v3/files").mock(return_value=httpx.Response(200, json={"files": []}))
 
     result = await drive_client.search_files(
         token="fake-token",
-        query="report",
+        q="mimeType = 'application/pdf' and trashed = false",
         max_results=5,
-        mime_type="application/pdf",
     )
 
     assert result == []
     url_str = str(respx.calls[0].request.url)
     assert "application%2Fpdf" in url_str or "application/pdf" in url_str
+    assert "trashed+%3D+false" in url_str or "trashed = false" in url_str
 
 
 @pytest.mark.asyncio
@@ -140,7 +140,7 @@ async def test_search_files_retries_on_500():
         ]
     )
 
-    result = await drive_client.search_files(token="fake-token", query="test", max_results=10, mime_type=None)
+    result = await drive_client.search_files(token="fake-token", q="fullText contains 'test'", max_results=10)
 
     assert result == []
     assert respx.calls.call_count == 2
@@ -154,7 +154,7 @@ async def test_search_files_does_not_retry_on_401():
     )
 
     with pytest.raises(httpx.HTTPStatusError) as exc_info:
-        await drive_client.search_files(token="bad-token", query="test", max_results=10, mime_type=None)
+        await drive_client.search_files(token="bad-token", q="fullText contains 'test'", max_results=10)
 
     assert exc_info.value.response.status_code == 401
     assert respx.calls.call_count == 1

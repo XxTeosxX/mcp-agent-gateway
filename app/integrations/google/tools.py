@@ -1,11 +1,14 @@
 import json
 import logging
 from collections.abc import Awaitable, Callable
+from datetime import date
 
+import httpx
 from mcp import types
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from app.integrations.google.drive_client import drive_client as _drive_client
+from app.integrations.google.drive_query import build_drive_query
 from app.integrations.google.token_store import (
     _GOOGLE_SHARED_USER,
     OAuthTokenNotFoundError,
@@ -18,9 +21,19 @@ logger = logging.getLogger(__name__)
 
 
 class DriveSearchInput(BaseModel):
-    query: str
-    max_results: int = Field(default=10, ge=1, le=100)
+    name_contains: str | None = None
+    full_text: str | None = None
     mime_type: str | None = None
+    in_folder: str | None = None
+    modified_after: date | None = None
+    include_trashed: bool = False
+    max_results: int = Field(default=10, ge=1, le=100)
+
+    @model_validator(mode="after")
+    def _require_filter(self) -> "DriveSearchInput":
+        if not any([self.name_contains, self.full_text, self.mime_type, self.in_folder, self.modified_after]):
+            raise ValueError("provide at least one search filter")
+        return self
 
 
 class DriveGetFileInput(BaseModel):
@@ -59,6 +72,14 @@ def _ok(data) -> types.CallToolResult:
     return types.CallToolResult(content=[types.TextContent(type="text", text=text)])
 
 
+def _ok_structured(files: list[dict]) -> types.CallToolResult:
+    payload = {"files": files}
+    return types.CallToolResult(
+        content=[types.TextContent(type="text", text=json.dumps(payload))],
+        structuredContent=payload,
+    )
+
+
 def _to_drive_file(f: dict) -> dict:
     return DriveFile(
         file_id=f["id"],
@@ -89,14 +110,29 @@ async def handle_drive_search_files(arguments: dict) -> types.CallToolResult:
     try:
         args = DriveSearchInput(**arguments)
     except ValidationError as exc:
-        return _error(f"Invalid input: {exc.errors()[0]['loc'][0]} — {exc.errors()[0]['msg']}")
+        err = exc.errors()[0]
+        loc = ".".join(str(part) for part in err["loc"]) or "input"
+        return _error(f"Invalid input: {loc} — {err['msg']}")
 
     token = await _get_drive_token()
     if isinstance(token, types.CallToolResult):
         return token
 
-    files = await _drive_client.search_files(token, args.query, args.max_results, args.mime_type)
-    return _ok([_to_drive_file(f) for f in files])
+    q = build_drive_query(
+        name_contains=args.name_contains,
+        full_text=args.full_text,
+        mime_type=args.mime_type,
+        in_folder=args.in_folder,
+        modified_after=args.modified_after,
+        include_trashed=args.include_trashed,
+    )
+    try:
+        files = await _drive_client.search_files(token, q, args.max_results)
+    except httpx.HTTPStatusError as exc:
+        return _error(f"Drive search failed: {exc.response.status_code}")
+    except httpx.RequestError:
+        return _error("Drive search failed: network error")
+    return _ok_structured([_to_drive_file(f) for f in files])
 
 
 @track_usage("drive-get-file-content")
@@ -134,15 +170,45 @@ DRIVE_REQUIRED_SCOPE = "mcp:google:read"
 DRIVE_TOOLS: list[types.Tool] = [
     types.Tool(
         name="drive-search-files",
-        description="Search files in the user's Google Drive by query string. Optionally filter by MIME type.",
+        description=(
+            "Search the shared Google Drive using structured filters (name, full text, MIME type, "
+            "parent folder, modified-after date). At least one filter is required. The gateway "
+            "composes the Drive query safely — callers never write Drive query syntax."
+        ),
         inputSchema={
             "type": "object",
-            "required": ["query"],
             "properties": {
-                "query": {"type": "string", "description": "Search query (e.g. 'proposal Acme Corp')"},
-                "max_results": {"type": "integer", "default": 10, "minimum": 1, "maximum": 100},
+                "name_contains": {"type": "string", "description": "Match files whose name contains this text"},
+                "full_text": {"type": "string", "description": "Full-text search within file contents and metadata"},
                 "mime_type": {"type": "string", "description": "Filter by MIME type (e.g. 'application/pdf')"},
+                "in_folder": {"type": "string", "description": "Restrict to children of this Drive folder ID"},
+                "modified_after": {
+                    "type": "string",
+                    "format": "date",
+                    "description": "Only files modified after this date (YYYY-MM-DD)",
+                },
+                "include_trashed": {"type": "boolean", "default": False},
+                "max_results": {"type": "integer", "default": 10, "minimum": 1, "maximum": 100},
             },
+        },
+        outputSchema={
+            "type": "object",
+            "properties": {
+                "files": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "file_id": {"type": "string"},
+                            "name": {"type": "string"},
+                            "mime_type": {"type": "string"},
+                            "web_view_link": {"type": "string"},
+                            "modified_time": {"type": "string"},
+                        },
+                    },
+                }
+            },
+            "required": ["files"],
         },
         annotations=types.ToolAnnotations(readOnlyHint=True),
     ),

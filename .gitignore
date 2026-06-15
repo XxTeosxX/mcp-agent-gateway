@@ -15,9 +15,10 @@ __pycache__/
 .venv/
 venv/
 
-# IDE
+# IDE / LSP (local editor config, not a project dependency)
 .vscode/
 .idea/
+pyrightconfig.json
 
 # OS
 .DS_Store
@@ -25,11 +26,14 @@ Thumbs.db
 
 # Test artifacts
 .coverage
-test-api.sh
 
-# Markdown docs (only README.md tracked)
+# CI-generated lock export (pip-audit)
+requirements.txt
+
+# Markdown docs (only README.md + COVERAGE.md tracked)
 *.md
 !README.md
+!COVERAGE.md
 
 # Private notes (interview prep)
 PRIVATE_NOTES.md
@@ -37,3 +41,6 @@ PRIVATE_NOTES.md
 # Runtime caches
 .ast-cache/
 .tiktoken_cache/
+
+# Git worktrees
+.worktrees/

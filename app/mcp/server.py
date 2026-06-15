@@ -8,6 +8,11 @@ from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData
 
 from app.integrations.google.job_tools import JOB_REGISTRY, JOB_REQUIRED_SCOPE, JOB_TOOLS
+from app.integrations.google.prompts import (
+    DRIVE_PROMPT_REGISTRY,
+    DRIVE_PROMPT_REQUIRED_SCOPE,
+    DRIVE_PROMPTS,
+)
 from app.integrations.google.tools import DRIVE_REGISTRY, DRIVE_REQUIRED_SCOPE, DRIVE_TOOLS
 from app.integrations.slack.tools import SLACK_REGISTRY, SLACK_REQUIRED_SCOPE, SLACK_TOOLS
 from app.mcp.event_store import InMemoryEventStore
@@ -30,6 +35,20 @@ _REGISTRY: dict[str, Callable] = {
 }
 
 
+# (prompts, registry, required_scope) — same scope-gating model as tools.
+_PROMPT_GROUPS: list[tuple[list[types.Prompt], dict[str, Callable], str | None]] = [
+    (list(DRIVE_PROMPTS), DRIVE_PROMPT_REGISTRY, DRIVE_PROMPT_REQUIRED_SCOPE),
+]
+
+PROMPT_SCOPE: dict[str, str | None] = {
+    prompt.name: required for prompts, _registry, required in _PROMPT_GROUPS for prompt in prompts
+}
+
+_PROMPT_REGISTRY: dict[str, Callable] = {
+    name: handler for _prompts, registry, _required in _PROMPT_GROUPS for name, handler in registry.items()
+}
+
+
 def _scope_ok(required: str | None, scopes: frozenset[str]) -> bool:
     return required is None or required in scopes
 
@@ -39,6 +58,14 @@ def visible_tools(scopes: frozenset[str]) -> list[types.Tool]:
     for tools, _registry, required in _GROUPS:
         if _scope_ok(required, scopes):
             out.extend(tools)
+    return out
+
+
+def visible_prompts(scopes: frozenset[str]) -> list[types.Prompt]:
+    out: list[types.Prompt] = []
+    for prompts, _registry, required in _PROMPT_GROUPS:
+        if _scope_ok(required, scopes):
+            out.extend(prompts)
     return out
 
 
@@ -62,6 +89,19 @@ def create_session_manager() -> StreamableHTTPSessionManager:
         if handler is None or not _scope_ok(TOOL_SCOPE.get(name), scopes):
             raise McpError(ErrorData(code=-32601, message=f"Unknown tool: {name}"))
         return await handler(arguments)
+
+    @mcp_server.list_prompts()
+    async def _list_prompts() -> list[types.Prompt]:
+        return visible_prompts(current_user_scopes.get())
+
+    @mcp_server.get_prompt()
+    async def _get_prompt(name: str, arguments: dict | None) -> types.GetPromptResult:
+        scopes = current_user_scopes.get()
+        handler = _PROMPT_REGISTRY.get(name)
+        # Same collapse as tools: unknown and scope-denied are indistinguishable.
+        if handler is None or not _scope_ok(PROMPT_SCOPE.get(name), scopes):
+            raise McpError(ErrorData(code=-32601, message=f"Unknown prompt: {name}"))
+        return handler(arguments)
 
     return StreamableHTTPSessionManager(
         app=mcp_server,

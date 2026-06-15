@@ -48,7 +48,7 @@ async def test_drive_tool_never_sends_downstream_jwt_upstream():
             new_callable=AsyncMock,
             return_value=GOOGLE_UPSTREAM_TOKEN,
         ):
-            result = await handle_drive_search_files({"query": "test", "max_results": 5})
+            result = await handle_drive_search_files({"full_text": "test", "max_results": 5})
 
     assert not result.isError
     assert route.called

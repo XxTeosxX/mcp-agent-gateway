@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from mcp import types
 
 from app.main import app
-from app.mcp.server import TOOL_SCOPE, handle_list_tools, visible_tools
+from app.mcp.server import PROMPT_SCOPE, TOOL_SCOPE, handle_list_tools, visible_prompts, visible_tools
 from app.shared.context import current_user_scopes
 from tests.conftest import make_token
 
@@ -168,6 +168,34 @@ class TestMCPIntegration:
                 assert result.get("isError") is True
                 assert "Unknown tool" in result["content"][0]["text"]
 
+    def test_unprivileged_user_cannot_get_drive_prompt(self, rsa_key) -> None:
+        roger_redis = FakeRedis(decode_responses=True)
+
+        async def _get_redis(_url):
+            await roger_redis.ping()
+            return roger_redis
+
+        roger = make_token(rsa_key, resource_access={"mcp-gateway": {"roles": ["slack-user"]}})
+        with patch("app.main.get_redis", _get_redis):
+            with TestClient(app) as c:
+                c.headers["Authorization"] = f"Bearer {roger}"
+                session_id = self._initialize(c)
+
+                resp = c.post(
+                    self.MCP_PATH,
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "prompts/get",
+                        "params": {"name": "drive-find-document", "arguments": {}},
+                    },
+                    headers={**self.JSON_HEADERS, "Mcp-Session-Id": session_id},
+                )
+                data = resp.json()
+                assert "error" in data
+                assert data["error"]["code"] == -32601
+                assert "Unknown prompt" in data["error"]["message"]
+
     def test_request_without_session_returns_error(self, rsa_key) -> None:
         fresh_redis = FakeRedis(decode_responses=True)
 
@@ -247,3 +275,20 @@ def test_tool_scope_map_covers_every_tool():
     assert all_names == set(TOOL_SCOPE)
     assert TOOL_SCOPE["drive-export-large-file"] == "mcp:google:read"
     assert TOOL_SCOPE["wait-for-job"] == "mcp:google:read"
+
+
+def test_prompts_visible_with_drive_scope():
+    names = {p.name for p in visible_prompts(frozenset({"mcp:google:read"}))}
+    assert "drive-find-document" in names
+
+
+def test_prompts_hidden_without_drive_scope():
+    names = {p.name for p in visible_prompts(frozenset({"mcp:slack:read"}))}
+    assert "drive-find-document" not in names
+
+
+def test_prompt_scope_map_covers_every_prompt():
+    # Every advertised prompt has an entry; nothing falls through ungated by accident.
+    names = {p.name for p in visible_prompts(frozenset({"mcp:google:read"}))}
+    assert names == set(PROMPT_SCOPE)
+    assert PROMPT_SCOPE["drive-find-document"] == "mcp:google:read"

@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager, suppress
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from starlette.types import Receive, Scope, Send
 
+from app.config import settings
 from app.integrations.google.drive_client import drive_client
 from app.integrations.google.job_worker import JobWorker
 from app.integrations.google.jobs import job_queue
@@ -12,6 +13,7 @@ from app.integrations.google.token_store import seed_shared_token_if_absent, tok
 from app.integrations.slack.slack_client import slack_client
 from app.integrations.slack.token_store import seed_shared_slack_tokens_if_absent, slack_token_store
 from app.mcp.server import create_session_manager
+from app.shared.redis import get_redis
 from app.shared.store import RedisStore
 from app.shared.usage import usage_recorder
 
@@ -43,12 +45,17 @@ async def mcp_lifespan(redis) -> AsyncIterator[None]:
     slack_token_store.init(RedisStore(redis, "slack:token:"))
     await seed_shared_slack_tokens_if_absent(slack_token_store.get())
     usage_recorder.init(redis)
-    job_queue.init(redis)
-    worker_task = asyncio.create_task(JobWorker(redis).run())
+    # Dedicated connection for the export pipeline's blocking stream reads
+    # (worker XREADGROUP, wait-for-job XREAD). socket_timeout=None keeps the
+    # BLOCK deadline from racing the read timeout and spamming TimeoutError.
+    jobs_redis = await get_redis(settings.REDIS_URL, socket_timeout=None)
+    job_queue.init(jobs_redis)
+    worker_task = asyncio.create_task(JobWorker(jobs_redis).run())
     async with manager.run():
         yield
     worker_task.cancel()
     with suppress(asyncio.CancelledError):
         await worker_task
+    await jobs_redis.aclose()
     await drive_client.close()
     await slack_client.close()
