@@ -1,3 +1,5 @@
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 from unittest.mock import patch
 
@@ -14,6 +16,25 @@ from app.shared.context import current_user_scopes
 from tests.conftest import make_token
 
 
+@contextmanager
+def _client_with_redis(redis: FakeRedis, token: str) -> Iterator[TestClient]:
+    """Boot the app with `redis` injected as the lifespan connection and `token` preset.
+
+    The app's composition root (`app.main`) builds redis itself, so the only seam to
+    inject a fake is patching `create_redis`; each caller passes its own isolated
+    FakeRedis so per-user/role state never bleeds across tests.
+    """
+
+    async def _get_redis(_url, **_kwargs):
+        await redis.ping()
+        return redis
+
+    with patch("app.main.create_redis", _get_redis):
+        with TestClient(app) as c:
+            c.headers["Authorization"] = f"Bearer {token}"
+            yield c
+
+
 @pytest.fixture(scope="session")
 def _session_fake_redis():
     return FakeRedis(decode_responses=True)
@@ -21,18 +42,12 @@ def _session_fake_redis():
 
 @pytest.fixture(scope="session")
 def client(rsa_key: RSAPrivateKey, _session_fake_redis: FakeRedis) -> TestClient:
-    async def _get_redis(_url):
-        await _session_fake_redis.ping()
-        return _session_fake_redis
-
     token = make_token(
         rsa_key,
         resource_access={"mcp-gateway": {"roles": ["drive-user", "slack-user"]}},
     )
-    with patch("app.main.get_redis", _get_redis):
-        with TestClient(app) as c:
-            c.headers["Authorization"] = f"Bearer {token}"
-            yield c
+    with _client_with_redis(_session_fake_redis, token) as c:
+        yield c
 
 
 class TestHandleListTools:
@@ -133,93 +148,72 @@ class TestMCPIntegration:
 
     def test_roger_cannot_see_or_call_drive(self, rsa_key) -> None:
         roger_redis = FakeRedis(decode_responses=True)
-
-        async def _get_redis(_url):
-            await roger_redis.ping()
-            return roger_redis
-
         roger = make_token(rsa_key, resource_access={"mcp-gateway": {"roles": ["slack-user"]}})
-        with patch("app.main.get_redis", _get_redis):
-            with TestClient(app) as c:
-                c.headers["Authorization"] = f"Bearer {roger}"
-                session_id = self._initialize(c)
+        with _client_with_redis(roger_redis, roger) as c:
+            session_id = self._initialize(c)
 
-                listed = c.post(
-                    self.MCP_PATH,
-                    json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
-                    headers={**self.JSON_HEADERS, "Mcp-Session-Id": session_id},
-                )
-                names = {t["name"] for t in listed.json()["result"]["tools"]}
-                assert "slack-send-message" in names
-                assert "drive-search-files" not in names
-                assert "drive-export-large-file" not in names
+            listed = c.post(
+                self.MCP_PATH,
+                json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+                headers={**self.JSON_HEADERS, "Mcp-Session-Id": session_id},
+            )
+            names = {t["name"] for t in listed.json()["result"]["tools"]}
+            assert "slack-send-message" in names
+            assert "drive-search-files" not in names
+            assert "drive-export-large-file" not in names
 
-                called = c.post(
-                    self.MCP_PATH,
-                    json={
-                        "jsonrpc": "2.0",
-                        "id": 3,
-                        "method": "tools/call",
-                        "params": {"name": "drive-search-files", "arguments": {"query": "x"}},
-                    },
-                    headers={**self.JSON_HEADERS, "Mcp-Session-Id": session_id},
-                )
-                result = called.json()["result"]
-                assert result.get("isError") is True
-                assert "Unknown tool" in result["content"][0]["text"]
+            called = c.post(
+                self.MCP_PATH,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 3,
+                    "method": "tools/call",
+                    "params": {"name": "drive-search-files", "arguments": {"query": "x"}},
+                },
+                headers={**self.JSON_HEADERS, "Mcp-Session-Id": session_id},
+            )
+            result = called.json()["result"]
+            assert result.get("isError") is True
+            assert "Unknown tool" in result["content"][0]["text"]
 
     def test_unprivileged_user_cannot_get_drive_prompt(self, rsa_key) -> None:
         roger_redis = FakeRedis(decode_responses=True)
-
-        async def _get_redis(_url):
-            await roger_redis.ping()
-            return roger_redis
-
         roger = make_token(rsa_key, resource_access={"mcp-gateway": {"roles": ["slack-user"]}})
-        with patch("app.main.get_redis", _get_redis):
-            with TestClient(app) as c:
-                c.headers["Authorization"] = f"Bearer {roger}"
-                session_id = self._initialize(c)
+        with _client_with_redis(roger_redis, roger) as c:
+            session_id = self._initialize(c)
 
-                resp = c.post(
-                    self.MCP_PATH,
-                    json={
-                        "jsonrpc": "2.0",
-                        "id": 2,
-                        "method": "prompts/get",
-                        "params": {"name": "drive-find-document", "arguments": {}},
-                    },
-                    headers={**self.JSON_HEADERS, "Mcp-Session-Id": session_id},
-                )
-                data = resp.json()
-                assert "error" in data
-                assert data["error"]["code"] == -32601
-                assert "Unknown prompt" in data["error"]["message"]
+            resp = c.post(
+                self.MCP_PATH,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "prompts/get",
+                    "params": {"name": "drive-find-document", "arguments": {}},
+                },
+                headers={**self.JSON_HEADERS, "Mcp-Session-Id": session_id},
+            )
+            data = resp.json()
+            assert "error" in data
+            assert data["error"]["code"] == -32601
+            assert "Unknown prompt" in data["error"]["message"]
 
     def test_request_without_session_returns_error(self, rsa_key) -> None:
         fresh_redis = FakeRedis(decode_responses=True)
-
-        async def _get_redis(_url):
-            await fresh_redis.ping()
-            return fresh_redis
-
         token = make_token(
             rsa_key,
             resource_access={"mcp-gateway": {"roles": ["drive-user", "slack-user"]}},
         )
-        with patch("app.main.get_redis", _get_redis):
-            with TestClient(app) as c:
-                c.headers["Authorization"] = f"Bearer {token}"
-                resp = c.post(
-                    self.MCP_PATH,
-                    json={
-                        "jsonrpc": "2.0",
-                        "id": 2,
-                        "method": "tools/list",
-                        "params": {},
-                    },
-                    headers=self.JSON_HEADERS,
-                )
+        with _client_with_redis(fresh_redis, token) as c:
+            resp = c.post(
+                self.MCP_PATH,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "tools/list",
+                    "params": {},
+                },
+                headers=self.JSON_HEADERS,
+            )
 
         data = resp.json()
         assert "error" in data

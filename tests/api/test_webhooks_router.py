@@ -4,11 +4,18 @@ import json
 import time
 
 import httpx
+import pytest
 from fakeredis.aioredis import FakeRedis
 
 from app.main import app
 
 _SECRET = "test-signing-secret"
+
+
+@pytest.fixture(autouse=True)
+def _seed_app_state(monkeypatch):
+    monkeypatch.setattr("app.config.settings.SLACK_SIGNING_SECRET", _SECRET)
+    app.state.slack_signing_secret = _SECRET
 
 
 def _sign(timestamp: str, raw: bytes) -> str:
@@ -30,7 +37,6 @@ def _headers(raw: bytes, *, ts: str | None = None, sig: str | None = None) -> di
 
 
 async def test_valid_event_published(monkeypatch):
-    monkeypatch.setattr("app.config.settings.SLACK_SIGNING_SECRET", _SECRET)
     redis = FakeRedis(decode_responses=True)
     app.state.redis = redis
     raw = json.dumps({"type": "event_callback", "event_id": "Ev123", "event": {"type": "message"}}).encode()
@@ -49,7 +55,6 @@ async def test_valid_event_published(monkeypatch):
 
 
 async def test_duplicate_event_published_once(monkeypatch):
-    monkeypatch.setattr("app.config.settings.SLACK_SIGNING_SECRET", _SECRET)
     redis = FakeRedis(decode_responses=True)
     app.state.redis = redis
     raw = json.dumps({"type": "event_callback", "event_id": "EvDup"}).encode()
@@ -63,7 +68,6 @@ async def test_duplicate_event_published_once(monkeypatch):
 
 
 async def test_bad_signature_rejected_nothing_published(monkeypatch):
-    monkeypatch.setattr("app.config.settings.SLACK_SIGNING_SECRET", _SECRET)
     redis = FakeRedis(decode_responses=True)
     app.state.redis = redis
     raw = json.dumps({"type": "event_callback", "event_id": "EvBad"}).encode()
@@ -76,7 +80,6 @@ async def test_bad_signature_rejected_nothing_published(monkeypatch):
 
 
 async def test_stale_timestamp_rejected(monkeypatch):
-    monkeypatch.setattr("app.config.settings.SLACK_SIGNING_SECRET", _SECRET)
     redis = FakeRedis(decode_responses=True)
     app.state.redis = redis
     raw = json.dumps({"type": "event_callback", "event_id": "EvOld"}).encode()
@@ -90,7 +93,6 @@ async def test_stale_timestamp_rejected(monkeypatch):
 
 
 async def test_url_verification_echoes_challenge(monkeypatch):
-    monkeypatch.setattr("app.config.settings.SLACK_SIGNING_SECRET", _SECRET)
     redis = FakeRedis(decode_responses=True)
     app.state.redis = redis
     raw = json.dumps({"type": "url_verification", "challenge": "abc123"}).encode()
@@ -105,7 +107,6 @@ async def test_url_verification_echoes_challenge(monkeypatch):
 
 async def test_no_bearer_required(monkeypatch):
 
-    monkeypatch.setattr("app.config.settings.SLACK_SIGNING_SECRET", _SECRET)
     redis = FakeRedis(decode_responses=True)
     app.state.redis = redis
     raw = json.dumps({"type": "event_callback", "event_id": "EvAuth"}).encode()
@@ -117,7 +118,6 @@ async def test_no_bearer_required(monkeypatch):
 
 
 async def test_non_object_json_returns_400(monkeypatch):
-    monkeypatch.setattr("app.config.settings.SLACK_SIGNING_SECRET", _SECRET)
     redis = FakeRedis(decode_responses=True)
     app.state.redis = redis
     raw = b"[1, 2, 3]"
@@ -130,7 +130,7 @@ async def test_non_object_json_returns_400(monkeypatch):
 
 
 async def test_unconfigured_secret_returns_503(monkeypatch):
-    monkeypatch.setattr("app.config.settings.SLACK_SIGNING_SECRET", "")
+    app.state.slack_signing_secret = ""
     redis = FakeRedis(decode_responses=True)
     app.state.redis = redis
     raw = json.dumps({"type": "event_callback", "event_id": "EvNoCfg"}).encode()

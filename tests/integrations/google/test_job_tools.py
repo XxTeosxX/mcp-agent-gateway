@@ -4,21 +4,19 @@ import pytest
 from fakeredis.aioredis import FakeRedis
 
 from app.integrations.google import job_tools
-from app.integrations.google.jobs import enqueue_export_job, job_queue
+from app.integrations.google.jobs import enqueue_export_job
 from app.shared.context import current_user_id
 
 
 @pytest.fixture
 def redis():
-    r = FakeRedis(decode_responses=True)
-    job_queue.init(r)
-    return r
+    return FakeRedis(decode_responses=True)
 
 
 async def test_export_tool_enqueues_and_returns_job_id(redis):
     token = current_user_id.set("u1")
     try:
-        result = await job_tools.handle_drive_export_large_file({"file_id": "file-1", "format": "pdf"})
+        result = await job_tools.handle_drive_export_large_file({"file_id": "file-1", "format": "pdf"}, redis=redis)
     finally:
         current_user_id.reset(token)
 
@@ -32,7 +30,7 @@ async def test_export_tool_enqueues_and_returns_job_id(redis):
 async def test_export_tool_rejects_unknown_format(redis):
     token = current_user_id.set("u1")
     try:
-        result = await job_tools.handle_drive_export_large_file({"file_id": "file-1", "format": "xlsx"})
+        result = await job_tools.handle_drive_export_large_file({"file_id": "file-1", "format": "xlsx"}, redis=redis)
     finally:
         current_user_id.reset(token)
 
@@ -44,7 +42,7 @@ async def test_wait_rejects_non_owner(redis):
     job_id = await enqueue_export_job(redis, "owner-user", "file-1", "pdf")
     token = current_user_id.set("intruder")
     try:
-        result = await job_tools.handle_wait_for_job({"job_id": job_id})
+        result = await job_tools.handle_wait_for_job({"job_id": job_id}, redis=redis)
     finally:
         current_user_id.reset(token)
 
@@ -56,7 +54,7 @@ async def test_wait_owner_pending_returns_pending(redis):
     job_id = await enqueue_export_job(redis, "u1", "file-1", "pdf")
     token = current_user_id.set("u1")
     try:
-        result = await job_tools.handle_wait_for_job({"job_id": job_id, "timeout_seconds": 1})
+        result = await job_tools.handle_wait_for_job({"job_id": job_id, "timeout_seconds": 1}, redis=redis)
     finally:
         current_user_id.reset(token)
 
@@ -69,7 +67,7 @@ async def test_wait_owner_returns_result(redis):
     await redis.xadd(f"results:{job_id}", {"status": "completed", "size_bytes": "9"})
     token = current_user_id.set("u1")
     try:
-        result = await job_tools.handle_wait_for_job({"job_id": job_id, "timeout_seconds": 1})
+        result = await job_tools.handle_wait_for_job({"job_id": job_id, "timeout_seconds": 1}, redis=redis)
     finally:
         current_user_id.reset(token)
 
@@ -78,14 +76,15 @@ async def test_wait_owner_returns_result(redis):
     assert body["size_bytes"] == "9"
 
 
-def test_job_tools_and_registry_shape():
+def test_job_tools_and_registry_shape(redis):
     assert {t.name for t in job_tools.JOB_TOOLS} == {
         "drive-export-large-file",
         "wait-for-job",
     }
-    assert set(job_tools.JOB_REGISTRY) == {
+    registry = job_tools.build_job_registry(redis=redis)
+    assert set(registry) == {
         "drive-export-large-file",
         "wait-for-job",
     }
-    for handler in job_tools.JOB_REGISTRY.values():
+    for handler in registry.values():
         assert hasattr(handler, "__wrapped__")

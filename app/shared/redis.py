@@ -1,7 +1,7 @@
 from redis.asyncio import Redis, from_url
 
 
-async def get_redis(url: str, *, socket_timeout: float | None = 5.0) -> Redis:
+async def create_redis(url: str, *, socket_timeout: float | None = 5.0) -> Redis:
     # socket_timeout guards normal (non-blocking) commands against a wedged
     # server. Pass socket_timeout=None for connections that issue blocking
     # reads (XREADGROUP/XREAD with BLOCK), otherwise the read timeout races the

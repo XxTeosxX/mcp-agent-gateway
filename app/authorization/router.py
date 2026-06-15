@@ -23,12 +23,17 @@ def _is_url(value: str) -> bool:
     return parsed.scheme in ("http", "https") and bool(parsed.netloc)
 
 
-def _error_redirect(redirect_uri: str, error: str, description: str | None = None) -> RedirectResponse:
-    params: dict = {"error": error}
+def _error_response(error: str, description: str | None = None) -> JSONResponse:
+    """Return an OAuth error locally.
+
+    We deliberately do NOT 302-redirect to the request's redirect_uri on these errors:
+    at this point the redirect_uri has either failed validation or not been validated
+    yet, and bouncing the user there would be an open redirect.
+    """
+    body: dict = {"error": error}
     if description:
-        params["error_description"] = description
-    url = httpx.URL(redirect_uri).copy_with(params=params)
-    return RedirectResponse(str(url), status_code=302)
+        body["error_description"] = description
+    return JSONResponse(status_code=400, content=body)
 
 
 @router.get("/.well-known/oauth-authorization-server")
@@ -64,19 +69,21 @@ async def authorize(
             cached = await client_repository.get(client_id, registry)
             if cached is None:
                 metadata = await fetch_client_metadata(client_id, allow_http=settings.DEBUG)
+                # Validate redirect_uri against the client's registered set BEFORE the
+                # user could ever be redirected there — never bounce to an unvalidated URI.
                 if redirect_uri not in metadata.redirect_uris:
-                    return _error_redirect(redirect_uri, "invalid_request", "redirect_uri_not_in_metadata")
+                    return _error_response("invalid_request", "redirect_uri_not_in_metadata")
                 registered = await enroll_mcp_client(metadata)
                 await client_repository.set(client_id, registered, registry)
                 cached = registered
             params["client_id"] = cached.client_id
         except ClientMetadataFetchError:
-            return _error_redirect(redirect_uri, "invalid_client", "metadata_fetch_failed")
+            return _error_response("invalid_client", "metadata_fetch_failed")
         except ClientMetadataValidationError as exc:
             description = "https_required" if "https_required" in str(exc) else "invalid_metadata"
-            return _error_redirect(redirect_uri, "invalid_client", description)
+            return _error_response("invalid_client", description)
         except DcrRegistrationError:
-            return _error_redirect(redirect_uri, "server_error", "registration_failed")
+            return _error_response("server_error", "registration_failed")
 
     keycloak_authorize = f"{settings.OAUTH_ISSUER_URL}/protocol/openid-connect/auth"
     target = httpx.URL(keycloak_authorize).copy_with(params=params)

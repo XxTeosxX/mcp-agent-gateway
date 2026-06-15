@@ -6,15 +6,15 @@ from app.shared.http_client import HttpClient
 
 
 def test_http_client_enables_tls_verification():
-    source = inspect.getsource(HttpClient.init)
+    source = inspect.getsource(HttpClient.__init__)
     assert "verify=True" in source or "verify = True" in source
 
 
 def test_drive_client_enables_tls_verification():
-    source = inspect.getsource(DriveClient.init)
+    source = inspect.getsource(DriveClient.__init__)
     assert "verify=True" in source or "verify = True" in source
 
 
 def test_slack_client_enables_tls_verification():
-    source = inspect.getsource(SlackClient.init)
+    source = inspect.getsource(SlackClient.__init__)
     assert "verify=True" in source or "verify = True" in source

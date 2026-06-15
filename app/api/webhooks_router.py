@@ -1,10 +1,10 @@
 import json
 import logging
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
-from app.config import settings
 from app.integrations.slack.signature import is_timestamp_fresh, verify_slack_signature
+from app.shared.dependencies import get_redis, get_slack_signing_secret
 
 logger = logging.getLogger(__name__)
 
@@ -17,8 +17,12 @@ _DEDUP_PREFIX = "webhook:slack:"
 
 
 @router.post("/slack")
-async def slack_webhook(request: Request) -> dict:
-    if not settings.SLACK_SIGNING_SECRET:
+async def slack_webhook(
+    request: Request,
+    redis=Depends(get_redis),
+    signing_secret: str = Depends(get_slack_signing_secret),
+) -> dict:
+    if not signing_secret:
         raise HTTPException(status_code=503, detail="webhook not configured")
 
     raw = await request.body()
@@ -28,7 +32,7 @@ async def slack_webhook(request: Request) -> dict:
         raise HTTPException(status_code=401, detail="missing signature headers")
     if not is_timestamp_fresh(timestamp, _MAX_AGE_SECONDS):
         raise HTTPException(status_code=401, detail="stale timestamp")
-    if not verify_slack_signature(settings.SLACK_SIGNING_SECRET, timestamp, raw, signature):
+    if not verify_slack_signature(signing_secret, timestamp, raw, signature):
         raise HTTPException(status_code=401, detail="invalid signature")
 
     try:
@@ -41,7 +45,6 @@ async def slack_webhook(request: Request) -> dict:
     if body.get("type") == "url_verification":
         return {"challenge": body.get("challenge", "")}
 
-    redis = request.app.state.redis
     event_id = body.get("event_id", "")
     if event_id:
         created = await redis.set(f"{_DEDUP_PREFIX}{event_id}", "1", nx=True, ex=_DEDUP_TTL_SECONDS)

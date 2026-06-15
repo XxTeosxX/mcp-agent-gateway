@@ -61,16 +61,3 @@ class InMemoryStore:
 
     async def clear(self) -> None:
         self._data.clear()
-
-
-class StoreHolder:
-    def __init__(self) -> None:
-        self._store: Store | None = None
-
-    def init(self, store: Store) -> None:
-        self._store = store
-
-    def get(self) -> Store:
-        if self._store is None:
-            raise RuntimeError("store not initialized — call init() in mcp_lifespan")
-        return self._store

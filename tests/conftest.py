@@ -8,12 +8,14 @@ from unittest.mock import patch
 
 import jwt
 import pytest
+from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fakeredis.aioredis import FakeRedis
 from fastapi.testclient import TestClient
 
 from app.config import settings
 from app.main import app
+from app.shared.store import InMemoryStore
 
 
 @pytest.fixture(scope="session")
@@ -61,11 +63,11 @@ def _fake_redis():
 
 @pytest.fixture(autouse=True)
 def patch_get_redis(_fake_redis):
-    async def _get_redis(_url):
+    async def _get_redis(_url, **_kwargs):
         await _fake_redis.ping()
         return _fake_redis
 
-    with patch("app.main.get_redis", _get_redis):
+    with patch("app.main.create_redis", _get_redis):
         yield
 
 
@@ -73,3 +75,13 @@ def patch_get_redis(_fake_redis):
 def client():
     with TestClient(app) as c:
         yield c
+
+
+@pytest.fixture
+def fake_store():
+    return InMemoryStore()
+
+
+@pytest.fixture
+def fernet():
+    return Fernet(Fernet.generate_key())

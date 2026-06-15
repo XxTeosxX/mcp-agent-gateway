@@ -1,28 +1,20 @@
-import asyncio
-
 import httpx
 import pytest
 import respx
 
-from app.integrations.google.drive_client import DriveClient, drive_client
+from app.integrations.google.drive_client import DriveClient
 
 
-@pytest.fixture(autouse=True)
-def setup_client():
-    drive_client.init()
-    yield
-    asyncio.run(drive_client.close())
-
-
-def test_get_raises_before_init():
-    fresh = DriveClient()
-    with pytest.raises(RuntimeError, match="not initialized"):
-        fresh.get()
+@pytest.fixture
+async def drive_client():
+    dc = DriveClient(timeout=10.0, max_connections=10, max_keepalive=5, max_retries=3)
+    yield dc
+    await dc.close()
 
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_search_files_returns_list():
+async def test_search_files_returns_list(drive_client):
     respx.get("https://www.googleapis.com/drive/v3/files").mock(
         return_value=httpx.Response(
             200,
@@ -49,7 +41,7 @@ async def test_search_files_returns_list():
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_search_files_passes_q_through_unchanged():
+async def test_search_files_passes_q_through_unchanged(drive_client):
     respx.get("https://www.googleapis.com/drive/v3/files").mock(return_value=httpx.Response(200, json={"files": []}))
 
     result = await drive_client.search_files(
@@ -66,7 +58,7 @@ async def test_search_files_passes_q_through_unchanged():
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_get_file_content_native_doc_uses_export():
+async def test_get_file_content_native_doc_uses_export(drive_client):
     file_id = "doc123"
     respx.get(f"https://www.googleapis.com/drive/v3/files/{file_id}").mock(
         return_value=httpx.Response(
@@ -90,7 +82,7 @@ async def test_get_file_content_native_doc_uses_export():
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_get_file_content_binary_uses_alt_media():
+async def test_get_file_content_binary_uses_alt_media(drive_client):
     file_id = "pdf123"
     respx.get(f"https://www.googleapis.com/drive/v3/files/{file_id}").mock(
         side_effect=[
@@ -106,7 +98,7 @@ async def test_get_file_content_binary_uses_alt_media():
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_list_recent_returns_files():
+async def test_list_recent_returns_files(drive_client):
     respx.get("https://www.googleapis.com/drive/v3/files").mock(
         return_value=httpx.Response(
             200,
@@ -132,7 +124,7 @@ async def test_list_recent_returns_files():
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_search_files_retries_on_500():
+async def test_search_files_retries_on_500(drive_client):
     respx.get("https://www.googleapis.com/drive/v3/files").mock(
         side_effect=[
             httpx.Response(500, json={"error": "server error"}),
@@ -148,7 +140,7 @@ async def test_search_files_retries_on_500():
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_search_files_does_not_retry_on_401():
+async def test_search_files_does_not_retry_on_401(drive_client):
     respx.get("https://www.googleapis.com/drive/v3/files").mock(
         return_value=httpx.Response(401, json={"error": "unauthorized"})
     )
@@ -160,24 +152,15 @@ async def test_search_files_does_not_retry_on_401():
     assert respx.calls.call_count == 1
 
 
-async def test_export_file_returns_bytes():
-    import httpx
-    import respx
+@pytest.mark.asyncio
+@respx.mock
+async def test_export_file_returns_bytes(drive_client):
+    route = respx.get("https://www.googleapis.com/drive/v3/files/file-1/export").mock(
+        return_value=httpx.Response(200, content=b"%PDF-1.7 fake bytes")
+    )
 
-    from app.integrations.google.drive_client import DriveClient
+    data = await drive_client.export_file("tok", "file-1", "application/pdf")
 
-    client = DriveClient()
-    client.init()
-    try:
-        with respx.mock:
-            route = respx.get("https://www.googleapis.com/drive/v3/files/file-1/export").mock(
-                return_value=httpx.Response(200, content=b"%PDF-1.7 fake bytes")
-            )
-
-            data = await client.export_file("tok", "file-1", "application/pdf")
-
-        assert data == b"%PDF-1.7 fake bytes"
-        assert route.calls[0].request.url.params["mimeType"] == "application/pdf"
-        assert route.calls[0].request.headers["Authorization"] == "Bearer tok"
-    finally:
-        await client.close()
+    assert data == b"%PDF-1.7 fake bytes"
+    assert route.calls[0].request.url.params["mimeType"] == "application/pdf"
+    assert route.calls[0].request.headers["Authorization"] == "Bearer tok"

@@ -7,7 +7,6 @@ from app.shared.usage import (
     count_tokens,
     record_usage,
     track_usage,
-    usage_recorder,
 )
 
 
@@ -37,11 +36,10 @@ async def test_record_usage_appends_entry(redis):
 
 
 async def test_track_usage_records_in_and_out(redis):
-    usage_recorder.init(redis)
     token = current_user_id.set("u1")
     try:
 
-        @track_usage("dummy-tool")
+        @track_usage("dummy-tool", redis)
         async def handler(arguments):
             return _result("some output text")
 
@@ -59,11 +57,10 @@ async def test_track_usage_records_in_and_out(redis):
 
 
 async def test_track_usage_fail_open_when_no_redis():
-    usage_recorder.init(None)
     token = current_user_id.set("u1")
     try:
 
-        @track_usage("dummy-tool")
+        @track_usage("dummy-tool", None)
         async def handler(arguments):
             return _result("output")
 
@@ -79,11 +76,10 @@ async def test_track_usage_fail_open_when_xadd_raises():
         async def xadd(self, *args, **kwargs):
             raise RuntimeError("redis down")
 
-    usage_recorder.init(BrokenRedis())
     token = current_user_id.set("u1")
     try:
 
-        @track_usage("dummy-tool")
+        @track_usage("dummy-tool", BrokenRedis())
         async def handler(arguments):
             return _result("output")
 
@@ -95,11 +91,10 @@ async def test_track_usage_fail_open_when_xadd_raises():
 
 
 async def test_track_usage_skips_when_no_user(redis):
-    usage_recorder.init(redis)
     token = current_user_id.set("")
     try:
 
-        @track_usage("dummy-tool")
+        @track_usage("dummy-tool", redis)
         async def handler(arguments):
             return _result("output")
 

@@ -7,36 +7,30 @@ from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData
 
-from app.integrations.google.job_tools import JOB_REGISTRY, JOB_REQUIRED_SCOPE, JOB_TOOLS
+from app.integrations.google.job_tools import JOB_REQUIRED_SCOPE, JOB_TOOLS, build_job_registry
 from app.integrations.google.prompts import (
     DRIVE_PROMPT_REGISTRY,
     DRIVE_PROMPT_REQUIRED_SCOPE,
     DRIVE_PROMPTS,
 )
-from app.integrations.google.tools import DRIVE_REGISTRY, DRIVE_REQUIRED_SCOPE, DRIVE_TOOLS
-from app.integrations.slack.tools import SLACK_REGISTRY, SLACK_REQUIRED_SCOPE, SLACK_TOOLS
+from app.integrations.google.tools import DRIVE_REQUIRED_SCOPE, DRIVE_TOOLS, build_drive_registry
+from app.integrations.slack.tools import SLACK_REQUIRED_SCOPE, SLACK_TOOLS, build_slack_registry
 from app.mcp.event_store import InMemoryEventStore
 from app.shared.context import current_user_scopes
 
 logger = logging.getLogger(__name__)
 
-# (tools, registry, required_scope) — required_scope=None means ungated.
-_GROUPS: list[tuple[list[types.Tool], dict[str, Callable], str | None]] = [
-    (list(DRIVE_TOOLS), DRIVE_REGISTRY, DRIVE_REQUIRED_SCOPE),
-    (list(JOB_TOOLS), JOB_REGISTRY, JOB_REQUIRED_SCOPE),
-    (list(SLACK_TOOLS), SLACK_REGISTRY, SLACK_REQUIRED_SCOPE),
+# (tools, required_scope) — required_scope=None means ungated.
+_GROUPS: list[tuple[list[types.Tool], str | None]] = [
+    (list(DRIVE_TOOLS), DRIVE_REQUIRED_SCOPE),
+    (list(JOB_TOOLS), JOB_REQUIRED_SCOPE),
+    (list(SLACK_TOOLS), SLACK_REQUIRED_SCOPE),
 ]
 
 # tool name -> required scope (or None). Single source for filter + gate.
-TOOL_SCOPE: dict[str, str | None] = {tool.name: required for tools, _registry, required in _GROUPS for tool in tools}
+TOOL_SCOPE: dict[str, str | None] = {tool.name: required for tools, required in _GROUPS for tool in tools}
 
-_REGISTRY: dict[str, Callable] = {
-    name: handler for _tools, registry, _required in _GROUPS for name, handler in registry.items()
-}
-
-
-# (prompts, registry, required_scope) — same scope-gating model as tools.
-_PROMPT_GROUPS: list[tuple[list[types.Prompt], dict[str, Callable], str | None]] = [
+_PROMPT_GROUPS: list[tuple[list[types.Prompt], dict, str | None]] = [
     (list(DRIVE_PROMPTS), DRIVE_PROMPT_REGISTRY, DRIVE_PROMPT_REQUIRED_SCOPE),
 ]
 
@@ -55,7 +49,7 @@ def _scope_ok(required: str | None, scopes: frozenset[str]) -> bool:
 
 def visible_tools(scopes: frozenset[str]) -> list[types.Tool]:
     out: list[types.Tool] = []
-    for tools, _registry, required in _GROUPS:
+    for tools, required in _GROUPS:
         if _scope_ok(required, scopes):
             out.extend(tools)
     return out
@@ -73,7 +67,68 @@ async def handle_list_tools() -> list[types.Tool]:
     return visible_tools(current_user_scopes.get())
 
 
-def create_session_manager() -> StreamableHTTPSessionManager:
+def _build_registry(
+    *,
+    redis,
+    jobs_redis,
+    http_client,
+    drive_client,
+    slack_client,
+    google_token_store,
+    slack_token_store,
+    google_fernet,
+    slack_fernet,
+    google_client_id: str,
+    google_client_secret: str,
+) -> dict[str, Callable]:
+    return {
+        **build_drive_registry(
+            drive_client=drive_client,
+            token_store=google_token_store,
+            fernet=google_fernet,
+            http_client=http_client,
+            client_id=google_client_id,
+            client_secret=google_client_secret,
+            redis=redis,
+        ),
+        **build_job_registry(redis=jobs_redis),
+        **build_slack_registry(
+            slack_client=slack_client,
+            token_store=slack_token_store,
+            fernet=slack_fernet,
+            redis=redis,
+        ),
+    }
+
+
+def create_session_manager(
+    *,
+    redis,
+    jobs_redis,
+    http_client,
+    drive_client,
+    slack_client,
+    google_token_store,
+    slack_token_store,
+    google_fernet,
+    slack_fernet,
+    google_client_id: str,
+    google_client_secret: str,
+) -> StreamableHTTPSessionManager:
+    registry = _build_registry(
+        redis=redis,
+        jobs_redis=jobs_redis,
+        http_client=http_client,
+        drive_client=drive_client,
+        slack_client=slack_client,
+        google_token_store=google_token_store,
+        slack_token_store=slack_token_store,
+        google_fernet=google_fernet,
+        slack_fernet=slack_fernet,
+        google_client_id=google_client_id,
+        google_client_secret=google_client_secret,
+    )
+
     mcp_server = Server("mcp-streamable-http-demo")
 
     @mcp_server.list_tools()
@@ -83,7 +138,7 @@ def create_session_manager() -> StreamableHTTPSessionManager:
     @mcp_server.call_tool()
     async def _call(name: str, arguments: dict) -> types.CallToolResult:
         scopes = current_user_scopes.get()
-        handler = _REGISTRY.get(name)
+        handler = registry.get(name)
         # Unknown tool AND scope-denied collapse to the same error: a caller
         # without the scope cannot tell the tool exists.
         if handler is None or not _scope_ok(TOOL_SCOPE.get(name), scopes):

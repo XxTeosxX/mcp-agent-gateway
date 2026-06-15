@@ -1,29 +1,21 @@
-import asyncio
-
 import httpx
 import pytest
 import respx
 
 from app.integrations.slack.constants import SLACK_API_BASE
-from app.integrations.slack.slack_client import SlackAPIError, SlackClient, slack_client
+from app.integrations.slack.slack_client import SlackAPIError, SlackClient
 
 
-@pytest.fixture(autouse=True)
-def setup_client():
-    slack_client.init()
-    yield
-    asyncio.run(slack_client.close())
-
-
-def test_get_raises_before_init():
-    fresh = SlackClient()
-    with pytest.raises(RuntimeError, match="not initialized"):
-        fresh.get()
+@pytest.fixture
+async def slack_client():
+    sc = SlackClient(timeout=10.0, max_retries=3)
+    yield sc
+    await sc.close()
 
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_post_message_success():
+async def test_post_message_success(slack_client):
     respx.post(f"{SLACK_API_BASE}/chat.postMessage").mock(
         return_value=httpx.Response(200, json={"ok": True, "channel": "C1", "ts": "1.2"})
     )
@@ -33,7 +25,7 @@ async def test_post_message_success():
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_post_message_ok_false_raises():
+async def test_post_message_ok_false_raises(slack_client):
     respx.post(f"{SLACK_API_BASE}/chat.postMessage").mock(
         return_value=httpx.Response(200, json={"ok": False, "error": "not_in_channel"})
     )
@@ -43,7 +35,7 @@ async def test_post_message_ok_false_raises():
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_search_messages_returns_matches():
+async def test_search_messages_returns_matches(slack_client):
     respx.get(f"{SLACK_API_BASE}/search.messages").mock(
         return_value=httpx.Response(
             200,
@@ -59,7 +51,7 @@ async def test_search_messages_returns_matches():
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_search_messages_ok_false_raises():
+async def test_search_messages_ok_false_raises(slack_client):
     respx.get(f"{SLACK_API_BASE}/search.messages").mock(
         return_value=httpx.Response(200, json={"ok": False, "error": "not_authed"})
     )
@@ -69,8 +61,7 @@ async def test_search_messages_ok_false_raises():
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_retries_on_429_then_succeeds(monkeypatch):
-    monkeypatch.setattr("app.config.settings.SLACK_MAX_RETRIES", 3)
+async def test_retries_on_429_then_succeeds(slack_client):
     route = respx.post(f"{SLACK_API_BASE}/chat.postMessage")
     route.side_effect = [
         httpx.Response(429),

@@ -1,21 +1,10 @@
-import asyncio
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from starlette.types import Receive, Scope, Send
 
-from app.config import settings
-from app.integrations.google.drive_client import drive_client
-from app.integrations.google.job_worker import JobWorker
-from app.integrations.google.jobs import job_queue
-from app.integrations.google.token_store import seed_shared_token_if_absent, token_store
-from app.integrations.slack.slack_client import slack_client
-from app.integrations.slack.token_store import seed_shared_slack_tokens_if_absent, slack_token_store
 from app.mcp.server import create_session_manager
-from app.shared.redis import get_redis
-from app.shared.store import RedisStore
-from app.shared.usage import usage_recorder
 
 
 class MCPApp:
@@ -35,27 +24,33 @@ mcp_app = MCPApp()
 
 
 @asynccontextmanager
-async def mcp_lifespan(redis) -> AsyncIterator[None]:
-    manager = create_session_manager()
+async def mcp_lifespan(
+    *,
+    redis,
+    jobs_redis,
+    http_client,
+    drive_client,
+    slack_client,
+    google_token_store,
+    slack_token_store,
+    google_fernet,
+    slack_fernet,
+    google_client_id: str,
+    google_client_secret: str,
+) -> AsyncIterator[None]:
+    manager = create_session_manager(
+        redis=redis,
+        jobs_redis=jobs_redis,
+        http_client=http_client,
+        drive_client=drive_client,
+        slack_client=slack_client,
+        google_token_store=google_token_store,
+        slack_token_store=slack_token_store,
+        google_fernet=google_fernet,
+        slack_fernet=slack_fernet,
+        google_client_id=google_client_id,
+        google_client_secret=google_client_secret,
+    )
     mcp_app.set_manager(manager)
-    drive_client.init()
-    slack_client.init()
-    token_store.init(RedisStore(redis, "token:"))
-    await seed_shared_token_if_absent(token_store.get())
-    slack_token_store.init(RedisStore(redis, "slack:token:"))
-    await seed_shared_slack_tokens_if_absent(slack_token_store.get())
-    usage_recorder.init(redis)
-    # Dedicated connection for the export pipeline's blocking stream reads
-    # (worker XREADGROUP, wait-for-job XREAD). socket_timeout=None keeps the
-    # BLOCK deadline from racing the read timeout and spamming TimeoutError.
-    jobs_redis = await get_redis(settings.REDIS_URL, socket_timeout=None)
-    job_queue.init(jobs_redis)
-    worker_task = asyncio.create_task(JobWorker(jobs_redis).run())
     async with manager.run():
         yield
-    worker_task.cancel()
-    with suppress(asyncio.CancelledError):
-        await worker_task
-    await jobs_redis.aclose()
-    await drive_client.close()
-    await slack_client.close()

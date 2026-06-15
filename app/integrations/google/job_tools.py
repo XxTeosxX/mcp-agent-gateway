@@ -1,17 +1,11 @@
 import json
 import logging
-from collections.abc import Awaitable, Callable
+from functools import partial
 
 from mcp import types
 from pydantic import BaseModel, Field, ValidationError
 
-from app.integrations.google.jobs import (
-    EXPORT_FORMATS,
-    enqueue_export_job,
-    job_owner,
-    job_queue,
-    read_result,
-)
+from app.integrations.google.jobs import EXPORT_FORMATS, enqueue_export_job, job_owner, read_result
 from app.shared.context import current_user_id
 from app.shared.usage import track_usage
 
@@ -39,8 +33,7 @@ def _ok(data: dict) -> types.CallToolResult:
     return types.CallToolResult(content=[types.TextContent(type="text", text=json.dumps(data))])
 
 
-@track_usage("drive-export-large-file")
-async def handle_drive_export_large_file(arguments: dict) -> types.CallToolResult:
+async def handle_drive_export_large_file(arguments: dict, *, redis) -> types.CallToolResult:
     try:
         args = ExportInput(**arguments)
     except ValidationError as exc:
@@ -50,7 +43,7 @@ async def handle_drive_export_large_file(arguments: dict) -> types.CallToolResul
         return _error(f"Unsupported format '{args.format}'. Supported: {', '.join(EXPORT_FORMATS)}")
 
     try:
-        job_id = await enqueue_export_job(job_queue.get(), current_user_id.get(), args.file_id, args.format)
+        job_id = await enqueue_export_job(redis, current_user_id.get(), args.file_id, args.format)
     except Exception:
         logger.warning("failed to enqueue export job", exc_info=True)
         return _error("Could not enqueue export job — try again later.")
@@ -58,14 +51,12 @@ async def handle_drive_export_large_file(arguments: dict) -> types.CallToolResul
     return _ok({"job_id": job_id, "status": "queued"})
 
 
-@track_usage("wait-for-job")
-async def handle_wait_for_job(arguments: dict) -> types.CallToolResult:
+async def handle_wait_for_job(arguments: dict, *, redis) -> types.CallToolResult:
     try:
         args = WaitInput(**arguments)
     except ValidationError as exc:
         return _error(f"Invalid input: {exc.errors()[0]['loc'][0]} — {exc.errors()[0]['msg']}")
 
-    redis = job_queue.get()
     owner = await job_owner(redis, args.job_id)
     if owner is None or owner != current_user_id.get():
         return _error("job not found")
@@ -116,7 +107,10 @@ JOB_TOOLS: list[types.Tool] = [
     ),
 ]
 
-JOB_REGISTRY: dict[str, Callable[[dict], Awaitable[types.CallToolResult]]] = {
-    "drive-export-large-file": handle_drive_export_large_file,
-    "wait-for-job": handle_wait_for_job,
-}
+
+def build_job_registry(*, redis):
+    handlers = {
+        "drive-export-large-file": partial(handle_drive_export_large_file, redis=redis),
+        "wait-for-job": partial(handle_wait_for_job, redis=redis),
+    }
+    return {name: track_usage(name, redis)(h) for name, h in handlers.items()}

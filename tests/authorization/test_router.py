@@ -86,26 +86,31 @@ class TestOAuthAuthorize:
             client.get(_authorize_url("https://myapp.com/client-metadata.json"), follow_redirects=False)
         assert mock_fetch.await_count == 1
 
-    def test_metadata_fetch_failure_returns_invalid_client(self, client: TestClient) -> None:
+    def test_metadata_fetch_failure_returns_400_without_redirect(self, client: TestClient) -> None:
         with patch(
             "app.authorization.router.fetch_client_metadata",
             new=AsyncMock(side_effect=ClientMetadataFetchError("timeout")),
         ):
             resp = client.get(_authorize_url("https://myapp.com/client-metadata.json"), follow_redirects=False)
-        assert resp.status_code == 302
-        assert "error=invalid_client" in resp.headers["location"]
-        assert "metadata_fetch_failed" in resp.headers["location"]
+        assert resp.status_code == 400
+        assert "location" not in resp.headers
+        body = resp.json()
+        assert body["error"] == "invalid_client"
+        assert body["error_description"] == "metadata_fetch_failed"
 
-    def test_https_required_error_in_redirect(self, client: TestClient) -> None:
+    def test_https_required_error_returns_400_without_redirect(self, client: TestClient) -> None:
         with patch(
             "app.authorization.router.fetch_client_metadata",
             new=AsyncMock(side_effect=ClientMetadataValidationError("https_required")),
         ):
             resp = client.get(_authorize_url("http://myapp.com/client-metadata.json"), follow_redirects=False)
-        assert resp.status_code == 302
-        assert "https_required" in resp.headers["location"]
+        assert resp.status_code == 400
+        assert "location" not in resp.headers
+        assert resp.json()["error_description"] == "https_required"
 
-    def test_redirect_uri_not_in_metadata_returns_invalid_request(self, client: TestClient) -> None:
+    def test_redirect_uri_not_in_metadata_does_not_redirect_to_it(self, client: TestClient) -> None:
+        # Regression: an attacker-supplied redirect_uri that fails the metadata allowlist
+        # must NOT be echoed back in a 302 Location (open redirect).
         metadata_other = ClientMetadata(
             redirect_uris=["https://other.com/callback"],
             client_name="App",
@@ -114,14 +119,16 @@ class TestOAuthAuthorize:
             resp = client.get(
                 _authorize_url(
                     "https://myapp.com/client-metadata.json",
-                    redirect_uri="https://myapp.com/callback",
+                    redirect_uri="https://evil.example/callback",
                 ),
                 follow_redirects=False,
             )
-        assert resp.status_code == 302
-        assert "error=invalid_request" in resp.headers["location"]
+        assert resp.status_code == 400
+        assert "location" not in resp.headers
+        assert "evil.example" not in resp.text
+        assert resp.json()["error"] == "invalid_request"
 
-    def test_dcr_failure_returns_server_error(self, client: TestClient) -> None:
+    def test_dcr_failure_returns_400_server_error(self, client: TestClient) -> None:
         with (
             patch("app.authorization.router.fetch_client_metadata", new=AsyncMock(return_value=_METADATA)),
             patch(
@@ -130,5 +137,6 @@ class TestOAuthAuthorize:
             ),
         ):
             resp = client.get(_authorize_url("https://myapp.com/client-metadata.json"), follow_redirects=False)
-        assert resp.status_code == 302
-        assert "error=server_error" in resp.headers["location"]
+        assert resp.status_code == 400
+        assert "location" not in resp.headers
+        assert resp.json()["error"] == "server_error"

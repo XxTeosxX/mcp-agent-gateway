@@ -1,17 +1,19 @@
 import json
 import logging
 from collections.abc import Awaitable, Callable
+from functools import partial
 
+from cryptography.fernet import Fernet
 from mcp import types
 from pydantic import BaseModel, Field, ValidationError
 
-from app.integrations.slack.slack_client import SlackAPIError, slack_client as _slack_client
+from app.integrations.slack.slack_client import SlackAPIError, SlackClient
 from app.integrations.slack.token_store import (
     _SLACK_SHARED_USER,
     SlackTokenNotFoundError,
     get_valid_slack_token,
-    slack_token_store,
 )
+from app.shared.store import Store
 from app.shared.usage import track_usage
 
 logger = logging.getLogger(__name__)
@@ -68,44 +70,46 @@ def _to_match(m: dict) -> dict:
 _NOT_AUTHORIZED = "Slack is not authorized. Provision SLACK_SHARED_BOT_TOKEN / SLACK_SHARED_USER_TOKEN (see README)."
 
 
-async def _get_slack_token(token_type: str) -> str | types.CallToolResult:
+async def _get_slack_token(token_type, slack_client, token_store, fernet) -> str | types.CallToolResult:
     try:
-        return await get_valid_slack_token(_SLACK_SHARED_USER, token_type, slack_token_store.get())
+        return await get_valid_slack_token(_SLACK_SHARED_USER, token_type, token_store, fernet)
     except SlackTokenNotFoundError:
         return _error(_NOT_AUTHORIZED)
 
 
-@track_usage("slack-send-message")
-async def handle_slack_send_message(arguments: dict) -> types.CallToolResult:
+async def handle_slack_send_message(
+    arguments: dict, *, slack_client: SlackClient, token_store: Store, fernet: Fernet
+) -> types.CallToolResult:
     try:
         args = SlackSendInput(**arguments)
     except ValidationError as exc:
         return _error(f"Invalid input: {exc.errors()[0]['loc'][0]} — {exc.errors()[0]['msg']}")
 
-    token = await _get_slack_token("bot")
+    token = await _get_slack_token("bot", slack_client, token_store, fernet)
     if isinstance(token, types.CallToolResult):
         return token
 
     try:
-        result = await _slack_client.post_message(token, args.channel, args.text)
+        result = await slack_client.post_message(token, args.channel, args.text)
     except SlackAPIError as exc:
         return _error(f"Slack error: {exc}")
     return _ok(SlackSendResult(**result).model_dump())
 
 
-@track_usage("slack-search-messages")
-async def handle_slack_search_messages(arguments: dict) -> types.CallToolResult:
+async def handle_slack_search_messages(
+    arguments: dict, *, slack_client: SlackClient, token_store: Store, fernet: Fernet
+) -> types.CallToolResult:
     try:
         args = SlackSearchInput(**arguments)
     except ValidationError as exc:
         return _error(f"Invalid input: {exc.errors()[0]['loc'][0]} — {exc.errors()[0]['msg']}")
 
-    token = await _get_slack_token("user")
+    token = await _get_slack_token("user", slack_client, token_store, fernet)
     if isinstance(token, types.CallToolResult):
         return token
 
     try:
-        matches = await _slack_client.search_messages(token, args.query, args.count)
+        matches = await slack_client.search_messages(token, args.query, args.count)
     except SlackAPIError as exc:
         return _error(f"Slack error: {exc}")
     return _ok([_to_match(m) for m in matches])
@@ -142,7 +146,13 @@ SLACK_TOOLS: list[types.Tool] = [
     ),
 ]
 
-SLACK_REGISTRY: dict[str, Callable[[dict], Awaitable[types.CallToolResult]]] = {
-    "slack-send-message": handle_slack_send_message,
-    "slack-search-messages": handle_slack_search_messages,
-}
+
+def build_slack_registry(
+    *, slack_client: SlackClient, token_store: Store, fernet: Fernet, redis
+) -> dict[str, Callable[[dict], Awaitable[types.CallToolResult]]]:
+    deps = dict(slack_client=slack_client, token_store=token_store, fernet=fernet)
+    handlers = {
+        "slack-send-message": partial(handle_slack_send_message, **deps),
+        "slack-search-messages": partial(handle_slack_search_messages, **deps),
+    }
+    return {name: track_usage(name, redis)(h) for name, h in handlers.items()}

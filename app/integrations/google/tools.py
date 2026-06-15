@@ -2,19 +2,22 @@ import json
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import date
+from functools import partial
 
 import httpx
+from cryptography.fernet import Fernet
 from mcp import types
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
-from app.integrations.google.drive_client import drive_client as _drive_client
+from app.integrations.google.drive_client import DriveClient
 from app.integrations.google.drive_query import build_drive_query
 from app.integrations.google.token_store import (
     _GOOGLE_SHARED_USER,
     OAuthTokenNotFoundError,
     get_valid_google_token,
-    token_store,
 )
+from app.shared.http_client import HttpClient
+from app.shared.store import Store
 from app.shared.usage import track_usage
 
 logger = logging.getLogger(__name__)
@@ -98,15 +101,37 @@ _NOT_AUTHORIZED = (
 )
 
 
-async def _get_drive_token() -> str | types.CallToolResult:
+async def _get_drive_token(
+    drive_client: DriveClient,
+    token_store: Store,
+    fernet: Fernet,
+    http_client: HttpClient,
+    client_id: str,
+    client_secret: str,
+) -> str | types.CallToolResult:
     try:
-        return await get_valid_google_token(_GOOGLE_SHARED_USER, _drive_client.get(), token_store.get())
+        return await get_valid_google_token(
+            _GOOGLE_SHARED_USER,
+            http_client.client,
+            token_store,
+            fernet,
+            client_id,
+            client_secret,
+        )
     except OAuthTokenNotFoundError:
         return _error(_NOT_AUTHORIZED)
 
 
-@track_usage("drive-search-files")
-async def handle_drive_search_files(arguments: dict) -> types.CallToolResult:
+async def handle_drive_search_files(
+    arguments: dict,
+    *,
+    drive_client: DriveClient,
+    token_store: Store,
+    fernet: Fernet,
+    http_client: HttpClient,
+    client_id: str,
+    client_secret: str,
+) -> types.CallToolResult:
     try:
         args = DriveSearchInput(**arguments)
     except ValidationError as exc:
@@ -114,7 +139,7 @@ async def handle_drive_search_files(arguments: dict) -> types.CallToolResult:
         loc = ".".join(str(part) for part in err["loc"]) or "input"
         return _error(f"Invalid input: {loc} — {err['msg']}")
 
-    token = await _get_drive_token()
+    token = await _get_drive_token(drive_client, token_store, fernet, http_client, client_id, client_secret)
     if isinstance(token, types.CallToolResult):
         return token
 
@@ -127,7 +152,7 @@ async def handle_drive_search_files(arguments: dict) -> types.CallToolResult:
         include_trashed=args.include_trashed,
     )
     try:
-        files = await _drive_client.search_files(token, q, args.max_results)
+        files = await drive_client.search_files(token, q, args.max_results)
     except httpx.HTTPStatusError as exc:
         return _error(f"Drive search failed: {exc.response.status_code}")
     except httpx.RequestError:
@@ -135,33 +160,49 @@ async def handle_drive_search_files(arguments: dict) -> types.CallToolResult:
     return _ok_structured([_to_drive_file(f) for f in files])
 
 
-@track_usage("drive-get-file-content")
-async def handle_drive_get_file_content(arguments: dict) -> types.CallToolResult:
+async def handle_drive_get_file_content(
+    arguments: dict,
+    *,
+    drive_client: DriveClient,
+    token_store: Store,
+    fernet: Fernet,
+    http_client: HttpClient,
+    client_id: str,
+    client_secret: str,
+) -> types.CallToolResult:
     try:
         args = DriveGetFileInput(**arguments)
     except ValidationError as exc:
         return _error(f"Invalid input: {exc.errors()[0]['loc'][0]} — {exc.errors()[0]['msg']}")
 
-    token = await _get_drive_token()
+    token = await _get_drive_token(drive_client, token_store, fernet, http_client, client_id, client_secret)
     if isinstance(token, types.CallToolResult):
         return token
 
-    file_data = await _drive_client.get_file_content(token, args.file_id)
+    file_data = await drive_client.get_file_content(token, args.file_id)
     return _ok(DriveFileContent(**file_data).model_dump())
 
 
-@track_usage("drive-list-recent")
-async def handle_drive_list_recent(arguments: dict) -> types.CallToolResult:
+async def handle_drive_list_recent(
+    arguments: dict,
+    *,
+    drive_client: DriveClient,
+    token_store: Store,
+    fernet: Fernet,
+    http_client: HttpClient,
+    client_id: str,
+    client_secret: str,
+) -> types.CallToolResult:
     try:
         args = DriveListRecentInput(**arguments)
     except ValidationError as exc:
         return _error(f"Invalid input: {exc.errors()[0]['loc'][0]} — {exc.errors()[0]['msg']}")
 
-    token = await _get_drive_token()
+    token = await _get_drive_token(drive_client, token_store, fernet, http_client, client_id, client_secret)
     if isinstance(token, types.CallToolResult):
         return token
 
-    files = await _drive_client.list_recent(token, args.days, args.max_results)
+    files = await drive_client.list_recent(token, args.days, args.max_results)
     return _ok([_to_drive_file(f) for f in files])
 
 
@@ -238,8 +279,28 @@ DRIVE_TOOLS: list[types.Tool] = [
     ),
 ]
 
-DRIVE_REGISTRY: dict[str, Callable[[dict], Awaitable[types.CallToolResult]]] = {
-    "drive-search-files": handle_drive_search_files,
-    "drive-get-file-content": handle_drive_get_file_content,
-    "drive-list-recent": handle_drive_list_recent,
-}
+
+def build_drive_registry(
+    *,
+    drive_client: DriveClient,
+    token_store: Store,
+    fernet: Fernet,
+    http_client: HttpClient,
+    client_id: str,
+    client_secret: str,
+    redis,
+) -> dict[str, Callable[[dict], Awaitable[types.CallToolResult]]]:
+    deps = dict(
+        drive_client=drive_client,
+        token_store=token_store,
+        fernet=fernet,
+        http_client=http_client,
+        client_id=client_id,
+        client_secret=client_secret,
+    )
+    handlers = {
+        "drive-search-files": partial(handle_drive_search_files, **deps),
+        "drive-get-file-content": partial(handle_drive_get_file_content, **deps),
+        "drive-list-recent": partial(handle_drive_list_recent, **deps),
+    }
+    return {name: track_usage(name, redis)(h) for name, h in handlers.items()}

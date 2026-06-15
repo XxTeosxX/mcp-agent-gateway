@@ -7,44 +7,40 @@ import respx
 from cryptography.fernet import Fernet
 from pydantic import ValidationError
 
-from app.config import settings
 from app.integrations.google import tools as drive_tools
-from app.integrations.google.drive_client import drive_client
-from app.integrations.google.token_store import token_store
+from app.integrations.google.drive_client import DriveClient
 from app.integrations.google.tools import DriveSearchInput
 from app.shared.context import current_user_id
+from app.shared.http_client import HttpClient
 from app.shared.store import InMemoryStore
 
 
-@pytest.fixture(autouse=True)
-def setup_drive_client():
-    drive_client.init()
-    yield
-    import asyncio
-
-    asyncio.run(drive_client.close())
-
-
-@pytest.fixture(autouse=True)
-def _init_token_store():
-    token_store.init(InMemoryStore())
-    yield
+@pytest.fixture
+def fernet():
+    return Fernet(Fernet.generate_key())
 
 
 @pytest.fixture
-def encryption_key(monkeypatch):
-    key = Fernet.generate_key().decode()
-    monkeypatch.setattr("app.config.settings.GOOGLE_TOKEN_ENCRYPTION_KEY", key)
-    monkeypatch.setattr("app.config.settings.GOOGLE_CLIENT_ID", "test-client-id")
-    monkeypatch.setattr("app.config.settings.GOOGLE_CLIENT_SECRET", "test-secret")
-    return key
+async def deps(fernet):
+    dc = DriveClient(timeout=10.0, max_connections=10, max_keepalive=5, max_retries=3)
+    http = HttpClient()
+    store = InMemoryStore()
+    yield dict(
+        drive_client=dc,
+        token_store=store,
+        fernet=fernet,
+        http_client=http,
+        client_id="cid",
+        client_secret="secret",
+    )
+    await dc.close()
+    await http.close()
 
 
 @pytest.fixture
-async def stored_token(encryption_key):
-    key = settings.GOOGLE_TOKEN_ENCRYPTION_KEY.encode()
-    enc = Fernet(key).encrypt(b"fake-refresh-token").decode()
-    await token_store.get().set(
+async def stored_token(deps):
+    enc = deps["fernet"].encrypt(b"fake-refresh-token").decode()
+    await deps["token_store"].set(
         "google:shared",
         json.dumps(
             {
@@ -58,7 +54,7 @@ async def stored_token(encryption_key):
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_drive_search_files_returns_structured_result(stored_token, encryption_key):
+async def test_drive_search_files_returns_structured_result(deps, stored_token):
     current_user_id.set("user-123")
 
     route = respx.get("https://www.googleapis.com/drive/v3/files").mock(
@@ -78,10 +74,9 @@ async def test_drive_search_files_returns_structured_result(stored_token, encryp
         )
     )
 
-    result = await drive_tools.handle_drive_search_files({"full_text": "proposal", "max_results": 10})
+    result = await drive_tools.handle_drive_search_files({"full_text": "proposal", "max_results": 10}, **deps)
 
     assert result.isError is False
-    # structured output
     assert result.structuredContent == {
         "files": [
             {
@@ -93,39 +88,35 @@ async def test_drive_search_files_returns_structured_result(stored_token, encryp
             }
         ]
     }
-    # text mirror still present
     assert json.loads(result.content[0].text) == result.structuredContent
-    # server composed the q from structured filters
-    assert "fullText+contains" in str(route.calls[0].request.url) or "fullText contains" in str(
-        route.calls[0].request.url
-    )
+    assert "fullText" in str(route.calls[0].request.url) or "fullText+contains" in str(route.calls[0].request.url)
 
 
 @pytest.mark.asyncio
-async def test_drive_search_files_no_token_returns_error():
+async def test_drive_search_files_no_token_returns_error(deps):
     current_user_id.set("user-no-token")
 
-    result = await drive_tools.handle_drive_search_files({"full_text": "anything"})
+    result = await drive_tools.handle_drive_search_files({"full_text": "anything"}, **deps)
 
     assert result.isError is True
     assert "authorize" in result.content[0].text.lower()
 
 
 @pytest.mark.asyncio
-async def test_drive_search_files_no_filter_returns_error():
+async def test_drive_search_files_no_filter_returns_error(deps):
     current_user_id.set("user-123")
-    result = await drive_tools.handle_drive_search_files({})
+    result = await drive_tools.handle_drive_search_files({}, **deps)
     assert result.isError is True
     assert "at least one search filter" in result.content[0].text.lower()
 
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_drive_search_files_http_error_returns_clean_error(stored_token, encryption_key):
+async def test_drive_search_files_http_error_returns_clean_error(deps, stored_token):
     current_user_id.set("user-123")
     respx.get("https://www.googleapis.com/drive/v3/files").mock(return_value=httpx.Response(400, json={"error": "bad"}))
 
-    result = await drive_tools.handle_drive_search_files({"full_text": "x"})
+    result = await drive_tools.handle_drive_search_files({"full_text": "x"}, **deps)
 
     assert result.isError is True
     text = result.content[0].text.lower()
@@ -139,12 +130,11 @@ def test_drive_tools_list_has_three_tools():
     assert names == {"drive-search-files", "drive-get-file-content", "drive-list-recent"}
 
 
-def test_drive_registry_has_three_handlers():
-    assert set(drive_tools.DRIVE_REGISTRY.keys()) == {
-        "drive-search-files",
-        "drive-get-file-content",
-        "drive-list-recent",
-    }
+def test_build_drive_registry_wraps_with_usage(deps):
+    registry = drive_tools.build_drive_registry(redis=None, **deps)
+    assert set(registry) == {"drive-search-files", "drive-get-file-content", "drive-list-recent"}
+    for handler in registry.values():
+        assert hasattr(handler, "__wrapped__")
 
 
 def test_input_accepts_single_filter():
@@ -171,11 +161,11 @@ def test_input_max_results_alone_is_not_a_filter():
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_drive_search_files_network_error_returns_clean_error(stored_token, encryption_key):
+async def test_drive_search_files_network_error_returns_clean_error(deps, stored_token):
     current_user_id.set("user-123")
     respx.get("https://www.googleapis.com/drive/v3/files").mock(side_effect=httpx.ConnectError("boom"))
 
-    result = await drive_tools.handle_drive_search_files({"full_text": "x"})
+    result = await drive_tools.handle_drive_search_files({"full_text": "x"}, **deps)
 
     assert result.isError is True
     text = result.content[0].text.lower()

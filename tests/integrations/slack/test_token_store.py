@@ -1,10 +1,9 @@
-import inspect
 import json
 
 import pytest
 from cryptography.fernet import Fernet
 
-from app.config import Settings, settings
+from app.config import Settings
 from app.integrations.slack.token_store import (
     _SLACK_SHARED_USER,
     SlackTokenNotFoundError,
@@ -27,46 +26,39 @@ def store():
     return InMemoryStore()
 
 
-@pytest.fixture(autouse=True)
-def slack_settings(monkeypatch):
-    key = Fernet.generate_key().decode()
-    monkeypatch.setattr("app.config.settings.SLACK_TOKEN_ENCRYPTION_KEY", key)
+@pytest.fixture
+def fernet():
+    return Fernet(Fernet.generate_key())
 
 
 @pytest.mark.asyncio
-async def test_missing_user_raises(store):
+async def test_missing_user_raises(store, fernet):
     with pytest.raises(SlackTokenNotFoundError):
-        await get_valid_slack_token("nobody", "bot", store)
+        await get_valid_slack_token("nobody", "bot", store, fernet)
 
 
 @pytest.mark.asyncio
-async def test_unknown_token_type_raises(store, monkeypatch):
-    monkeypatch.setattr("app.config.settings.SLACK_SHARED_BOT_TOKEN", "xoxb-bot")
-    monkeypatch.setattr("app.config.settings.SLACK_SHARED_USER_TOKEN", "xoxp-user")
-    await seed_shared_slack_tokens_if_absent(store)
+async def test_unknown_token_type_raises(store, fernet):
+    await seed_shared_slack_tokens_if_absent(store, fernet, "xoxb-bot", "xoxp-user")
     with pytest.raises(ValueError, match="Unknown token_type"):
-        await get_valid_slack_token(_SLACK_SHARED_USER, "workspace", store)
+        await get_valid_slack_token(_SLACK_SHARED_USER, "workspace", store, fernet)
 
 
 @pytest.mark.asyncio
-async def test_get_valid_slack_token_missing_key_raises_not_found(store):
-    f = Fernet(settings.SLACK_TOKEN_ENCRYPTION_KEY.encode())
+async def test_get_valid_slack_token_missing_key_raises_not_found(store, fernet):
     # bot token only — user_token_enc absent
-    await store.set("shared", json.dumps({"bot_token_enc": f.encrypt(b"xoxb-x").decode()}))
+    await store.set("shared", json.dumps({"bot_token_enc": fernet.encrypt(b"xoxb-x").decode()}))
 
     with pytest.raises(SlackTokenNotFoundError):
-        await get_valid_slack_token("shared", "user", store)
+        await get_valid_slack_token("shared", "user", store, fernet)
 
 
 @pytest.mark.asyncio
-async def test_seed_writes_both_tokens(store, monkeypatch):
-    monkeypatch.setattr("app.config.settings.SLACK_SHARED_BOT_TOKEN", "xoxb-bot")
-    monkeypatch.setattr("app.config.settings.SLACK_SHARED_USER_TOKEN", "xoxp-user")
+async def test_seed_writes_both_tokens(store, fernet):
+    await seed_shared_slack_tokens_if_absent(store, fernet, "xoxb-bot", "xoxp-user")
 
-    await seed_shared_slack_tokens_if_absent(store)
-
-    assert await get_valid_slack_token(_SLACK_SHARED_USER, "bot", store) == "xoxb-bot"
-    assert await get_valid_slack_token(_SLACK_SHARED_USER, "user", store) == "xoxp-user"
+    assert await get_valid_slack_token(_SLACK_SHARED_USER, "bot", store, fernet) == "xoxb-bot"
+    assert await get_valid_slack_token(_SLACK_SHARED_USER, "user", store, fernet) == "xoxp-user"
     # encrypted at rest — plaintext never stored
     raw = await store.get(_SLACK_SHARED_USER)
     assert "xoxb-bot" not in raw
@@ -74,40 +66,24 @@ async def test_seed_writes_both_tokens(store, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_seed_noop_when_env_empty(store, monkeypatch):
-    monkeypatch.setattr("app.config.settings.SLACK_SHARED_BOT_TOKEN", "")
-    monkeypatch.setattr("app.config.settings.SLACK_SHARED_USER_TOKEN", "")
-
-    await seed_shared_slack_tokens_if_absent(store)
-
+async def test_seed_noop_when_env_empty(store, fernet):
+    await seed_shared_slack_tokens_if_absent(store, fernet, "", "")
     assert await store.get(_SLACK_SHARED_USER) is None
 
 
 @pytest.mark.asyncio
-async def test_seed_noop_when_already_present(store, monkeypatch):
-    monkeypatch.setattr("app.config.settings.SLACK_SHARED_BOT_TOKEN", "xoxb-new")
-    monkeypatch.setattr("app.config.settings.SLACK_SHARED_USER_TOKEN", "")
+async def test_seed_noop_when_already_present(store, fernet):
     await store.set(_SLACK_SHARED_USER, json.dumps({"bot_token_enc": "preexisting"}))
 
-    await seed_shared_slack_tokens_if_absent(store)
+    await seed_shared_slack_tokens_if_absent(store, fernet, "xoxb-new", "")
 
     assert json.loads(await store.get(_SLACK_SHARED_USER)) == {"bot_token_enc": "preexisting"}
 
 
 @pytest.mark.asyncio
-async def test_seed_partial_bot_only(store, monkeypatch):
-    monkeypatch.setattr("app.config.settings.SLACK_SHARED_BOT_TOKEN", "xoxb-bot")
-    monkeypatch.setattr("app.config.settings.SLACK_SHARED_USER_TOKEN", "")
+async def test_seed_partial_bot_only(store, fernet):
+    await seed_shared_slack_tokens_if_absent(store, fernet, "xoxb-bot", "")
 
-    await seed_shared_slack_tokens_if_absent(store)
-
-    assert await get_valid_slack_token(_SLACK_SHARED_USER, "bot", store) == "xoxb-bot"
+    assert await get_valid_slack_token(_SLACK_SHARED_USER, "bot", store, fernet) == "xoxb-bot"
     with pytest.raises(SlackTokenNotFoundError):
-        await get_valid_slack_token(_SLACK_SHARED_USER, "user", store)
-
-
-def test_lifespan_seeds_shared_slack_tokens():
-    from app.mcp import app as mcp_app_module
-
-    src = inspect.getsource(mcp_app_module.mcp_lifespan)
-    assert "seed_shared_slack_tokens_if_absent" in src
+        await get_valid_slack_token(_SLACK_SHARED_USER, "user", store, fernet)

@@ -5,7 +5,15 @@ from app.shared.store import Store
 
 
 def get_http_client(request: Request) -> httpx.AsyncClient:
-    return request.app.state.http_client.get()
+    return request.app.state.http_client.client
+
+
+def get_redis(request: Request):
+    return request.app.state.redis
+
+
+def get_slack_signing_secret(request: Request) -> str:
+    return request.app.state.slack_signing_secret
 
 
 def get_oauth_state_store(request: Request) -> Store:

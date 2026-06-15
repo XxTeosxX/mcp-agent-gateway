@@ -34,20 +34,6 @@ async def record_usage(redis, user_id: str, tool: str, in_tokens: int, out_token
     )
 
 
-class UsageRecorderHolder:
-    def __init__(self) -> None:
-        self._redis = None
-
-    def init(self, redis) -> None:
-        self._redis = redis
-
-    def get(self):
-        return self._redis
-
-
-usage_recorder = UsageRecorderHolder()
-
-
 def _result_text(result) -> str:
     parts = []
     for block in getattr(result, "content", []) or []:
@@ -57,14 +43,13 @@ def _result_text(result) -> str:
     return "".join(parts)
 
 
-def track_usage(tool_name: str):
+def track_usage(tool_name: str, redis=None):
 
     def decorator(handler):
         @functools.wraps(handler)
         async def wrapper(arguments: dict):
             result = await handler(arguments)
             try:
-                redis = usage_recorder.get()
                 user_id = current_user_id.get("")
                 if redis is not None and user_id:
                     in_tokens = count_tokens(json.dumps(arguments, default=str))

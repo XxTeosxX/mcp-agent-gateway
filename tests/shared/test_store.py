@@ -2,7 +2,7 @@ import pytest
 import pytest_asyncio
 from fakeredis.aioredis import FakeRedis
 
-from app.shared.store import InMemoryStore, RedisStore, StoreHolder
+from app.shared.store import InMemoryStore, RedisStore
 
 
 @pytest_asyncio.fixture
@@ -90,16 +90,3 @@ async def test_inmemory_ttl_expires(monkeypatch):
     assert await store.get("k") == "v"
     t[0] = 1011.0
     assert await store.get("k") is None
-
-
-def test_holder_raises_before_init():
-    holder = StoreHolder()
-    with pytest.raises(RuntimeError, match="not initialized"):
-        holder.get()
-
-
-def test_holder_returns_after_init():
-    holder = StoreHolder()
-    mem = InMemoryStore()
-    holder.init(mem)
-    assert holder.get() is mem

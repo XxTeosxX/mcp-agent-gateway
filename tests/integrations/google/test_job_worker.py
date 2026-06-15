@@ -7,37 +7,23 @@ import respx
 from cryptography.fernet import Fernet
 from fakeredis.aioredis import FakeRedis
 
-from app.config import settings
-from app.integrations.google.drive_client import drive_client
+from app.integrations.google.drive_client import DriveClient
 from app.integrations.google.job_worker import JobWorker
 from app.integrations.google.jobs import enqueue_export_job, read_result
-from app.integrations.google.token_store import token_store
+from app.shared.http_client import HttpClient
 from app.shared.store import InMemoryStore
 
 
-@pytest.fixture(autouse=True)
-def _setup_singletons():
-    drive_client.init()
-    token_store.init(InMemoryStore())
-    yield
-    import asyncio
-
-    asyncio.run(drive_client.close())
+@pytest.fixture
+def fernet():
+    return Fernet(Fernet.generate_key())
 
 
 @pytest.fixture
-def encryption_key(monkeypatch):
-    key = Fernet.generate_key().decode()
-    monkeypatch.setattr("app.config.settings.GOOGLE_TOKEN_ENCRYPTION_KEY", key)
-    monkeypatch.setattr("app.config.settings.GOOGLE_CLIENT_ID", "test-client-id")
-    monkeypatch.setattr("app.config.settings.GOOGLE_CLIENT_SECRET", "test-secret")
-    return key
-
-
-@pytest.fixture
-async def stored_token(encryption_key):
-    enc = Fernet(settings.GOOGLE_TOKEN_ENCRYPTION_KEY.encode()).encrypt(b"refresh").decode()
-    await token_store.get().set(
+async def stored_token(fernet):
+    store = InMemoryStore()
+    enc = fernet.encrypt(b"refresh").decode()
+    await store.set(
         "u1",
         json.dumps(
             {
@@ -47,10 +33,25 @@ async def stored_token(encryption_key):
             }
         ),
     )
+    return store
+
+
+@pytest.fixture
+async def drive_client():
+    dc = DriveClient(timeout=10.0, max_connections=10, max_keepalive=5, max_retries=3)
+    yield dc
+    await dc.close()
+
+
+@pytest.fixture
+async def http_client():
+    hc = HttpClient()
+    yield hc
+    await hc.close()
 
 
 @respx.mock
-async def test_process_completed_writes_file_and_publishes(tmp_path, stored_token):
+async def test_process_completed_writes_file_and_publishes(tmp_path, stored_token, fernet, drive_client, http_client):
     from app.integrations.google.jobs import ensure_group
 
     redis = FakeRedis(decode_responses=True)
@@ -62,7 +63,16 @@ async def test_process_completed_writes_file_and_publishes(tmp_path, stored_toke
     entries = await redis.xrange("jobs:drive_export")
     entry_id, fields = entries[0]
 
-    worker = JobWorker(redis, export_dir=str(tmp_path))
+    worker = JobWorker(
+        redis=redis,
+        drive_client=drive_client,
+        token_store=stored_token,
+        fernet=fernet,
+        http_client=http_client,
+        client_id="test-client-id",
+        client_secret="test-secret",
+        export_dir=str(tmp_path),
+    )
     await worker._process(entry_id, fields)
 
     result = await read_result(redis, job_id, timeout_ms=200)
@@ -75,7 +85,7 @@ async def test_process_completed_writes_file_and_publishes(tmp_path, stored_toke
 
 
 @respx.mock
-async def test_process_failed_publishes_failed_result(tmp_path, stored_token):
+async def test_process_failed_publishes_failed_result(tmp_path, stored_token, fernet, drive_client, http_client):
     from app.integrations.google.jobs import ensure_group
 
     redis = FakeRedis(decode_responses=True)
@@ -86,7 +96,16 @@ async def test_process_failed_publishes_failed_result(tmp_path, stored_token):
     job_id = await enqueue_export_job(redis, "u1", "file-1", "pdf")
     entry_id, fields = (await redis.xrange("jobs:drive_export"))[0]
 
-    worker = JobWorker(redis, export_dir=str(tmp_path))
+    worker = JobWorker(
+        redis=redis,
+        drive_client=drive_client,
+        token_store=stored_token,
+        fernet=fernet,
+        http_client=http_client,
+        client_id="test-client-id",
+        client_secret="test-secret",
+        export_dir=str(tmp_path),
+    )
     await worker._process(entry_id, fields)
 
     result = await read_result(redis, job_id, timeout_ms=200)
@@ -95,7 +114,7 @@ async def test_process_failed_publishes_failed_result(tmp_path, stored_token):
 
 
 @respx.mock
-async def test_run_loop_consumes_and_publishes(tmp_path, stored_token):
+async def test_run_loop_consumes_and_publishes(tmp_path, stored_token, fernet, drive_client, http_client):
     import asyncio
 
     from app.integrations.google.jobs import ensure_group
@@ -107,7 +126,16 @@ async def test_run_loop_consumes_and_publishes(tmp_path, stored_token):
     )
     job_id = await enqueue_export_job(redis, "u1", "file-1", "txt")
 
-    worker = JobWorker(redis, export_dir=str(tmp_path))
+    worker = JobWorker(
+        redis=redis,
+        drive_client=drive_client,
+        token_store=stored_token,
+        fernet=fernet,
+        http_client=http_client,
+        client_id="test-client-id",
+        client_secret="test-secret",
+        export_dir=str(tmp_path),
+    )
     task = asyncio.create_task(worker.run())
     try:
         result = await read_result(redis, job_id, timeout_ms=3000)

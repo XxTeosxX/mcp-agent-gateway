@@ -18,20 +18,6 @@ EXPORT_FORMATS: dict[str, tuple[str, str]] = {
 }
 
 
-class JobQueueHolder:
-    def __init__(self) -> None:
-        self._redis = None
-
-    def init(self, redis) -> None:
-        self._redis = redis
-
-    def get(self):
-        return self._redis
-
-
-job_queue = JobQueueHolder()
-
-
 async def ensure_group(redis) -> None:
     try:
         await redis.xgroup_create(JOBS_STREAM, GROUP, id="$", mkstream=True)

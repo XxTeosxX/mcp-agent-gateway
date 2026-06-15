@@ -5,8 +5,6 @@ import socket
 import time
 from pathlib import Path
 
-from app.config import settings
-from app.integrations.google.drive_client import drive_client as _drive_client
 from app.integrations.google.jobs import (
     EXPORT_FORMATS,
     GROUP,
@@ -14,7 +12,7 @@ from app.integrations.google.jobs import (
     RESULT_TTL_SECONDS,
     ensure_group,
 )
-from app.integrations.google.token_store import get_valid_google_token, token_store
+from app.integrations.google.token_store import get_valid_google_token
 
 logger = logging.getLogger("app.jobs")
 
@@ -26,9 +24,25 @@ _IDLE_SLEEP_SECONDS = 0.1
 
 
 class JobWorker:
-    def __init__(self, redis, export_dir: str | None = None) -> None:
+    def __init__(
+        self,
+        redis,
+        drive_client,
+        token_store,
+        fernet,
+        http_client,
+        client_id: str,
+        client_secret: str,
+        export_dir: str,
+    ) -> None:
         self._redis = redis
-        self._export_dir = export_dir or settings.EXPORT_DIR
+        self._drive_client = drive_client
+        self._token_store = token_store
+        self._fernet = fernet
+        self._http_client = http_client
+        self._client_id = client_id
+        self._client_secret = client_secret
+        self._export_dir = export_dir
         self._consumer = f"worker-{os.getenv('HOSTNAME') or socket.gethostname()}-{os.getpid()}"
 
     async def run(self) -> None:
@@ -73,8 +87,15 @@ class JobWorker:
         job_id = fields["job_id"]
         try:
             export_mime, ext = EXPORT_FORMATS[fields["format"]]
-            token = await get_valid_google_token(fields["user_id"], _drive_client.get(), token_store.get())
-            data = await _drive_client.export_file(token, fields["file_id"], export_mime)
+            token = await get_valid_google_token(
+                fields["user_id"],
+                self._http_client.client,
+                self._token_store,
+                self._fernet,
+                self._client_id,
+                self._client_secret,
+            )
+            data = await self._drive_client.export_file(token, fields["file_id"], export_mime)
             path = os.path.join(self._export_dir, f"{job_id}.{ext}")
             await asyncio.to_thread(Path(path).write_bytes, data)
             os.chmod(path, 0o600)

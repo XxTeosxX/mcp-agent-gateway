@@ -1,6 +1,8 @@
 import time
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+
+from app.shared.dependencies import get_redis
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -19,9 +21,9 @@ async def get_usage(
     user_id: str,
     request: Request,
     hours: int = Query(default=24, ge=1, le=168),
+    redis=Depends(get_redis),
 ) -> dict:
     require_admin_scope(request)
-    redis = request.app.state.redis
     cutoff = time.time() - hours * 3600
 
     entries = await redis.xrange(f"usage:{user_id}")
