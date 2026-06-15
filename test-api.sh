@@ -17,12 +17,10 @@ set -euo pipefail
 # HOST the issuer is `localhost:8080` (NOT `keycloak:8080`, which only resolves
 # inside the compose network) — hence the localhost default below.
 #
-# Provide credentials one of three ways:
+# Provide credentials one of two ways:
 #   1. TOKEN=eyJ... ./test-api.sh                       # bring your own JWT
-#   2. MCP_USER=rayray ./test-api.sh                    # resource-owner password grant
-#      MCP_USER=june   ./test-api.sh                    # (MCP_PASSWORD defaults to <user>-pass)
-#   3. CLIENT_ID=mcp-test CLIENT_SECRET=local-dev-only-not-secret ./test-api.sh
-#                                                       # client_credentials grant
+#   2. CLIENT_ID=mcp-test CLIENT_SECRET=local-dev-only-not-secret ./test-api.sh
+#                                                       # client_credentials (OAuth 2.1)
 #
 # Scopes drive what you can see/call (tools + prompts are scope-gated):
 #   rayray  -> drive-user + slack-user  (full scope: drive + slack)
@@ -56,29 +54,15 @@ MCP_ACCEPT="application/json, text/event-stream"
 OAUTH_ISSUER_URL="${OAUTH_ISSUER_URL:-http://localhost:8080/realms/mcp-gateway}"
 KEYCLOAK_TOKEN_URL="${KEYCLOAK_TOKEN_URL:-$OAUTH_ISSUER_URL/protocol/openid-connect/token}"
 
-# Confidential client used for resource-owner password grants (MCP_USER path).
-# mcp-gateway carries the mcp-audience mapper + fullScopeAllowed, so user tokens
-# get the right `aud` and the user's mcp-gateway client roles.
-USER_CLIENT_ID="${USER_CLIENT_ID:-mcp-gateway}"
-USER_CLIENT_SECRET="${USER_CLIENT_SECRET:-mcp-gateway-secret}"
-
 # ── Resolve a Bearer token ────────────────────────────────────────────────────
-# NB: read MCP_USER, NOT USERNAME — the OS already exports USERNAME (your login),
-# so `USERNAME=rayray ...` would be silently shadowed by the ambient value.
-if [ -z "${TOKEN:-}" ] && [ -n "${MCP_USER:-}" ]; then
-  # Seeded users follow the `<username>-pass` convention (rayray-pass, june-pass).
-  MCP_PASSWORD="${MCP_PASSWORD:-${MCP_USER}-pass}"
-  echo "Fetching token for user '$MCP_USER' from Keycloak ($KEYCLOAK_TOKEN_URL)..."
-  TOKEN=$(curl -s -X POST "$KEYCLOAK_TOKEN_URL" \
-    -d "grant_type=password" \
-    -d "client_id=${USER_CLIENT_ID}" \
-    -d "client_secret=${USER_CLIENT_SECRET}" \
-    -d "username=${MCP_USER}" \
-    -d "password=${MCP_PASSWORD}" \
-    -d "scope=openid" \
-    | jq -r '.access_token // empty')
-fi
-
+# Two credential modes are supported:
+#   1. TOKEN=eyJ... ./test-api.sh                       # bring your own JWT
+#   2. CLIENT_ID=mcp-test CLIENT_SECRET=local-dev-only-not-secret bash test-api.sh
+#                                                       # client_credentials (OAuth 2.1)
+#
+# The password grant has been removed because OAuth 2.1 no longer allows it.
+# To test with a user-scoped token, obtain one from your IdP's authorization-code
+# flow with PKCE and pass it via TOKEN=...
 if [ -z "${TOKEN:-}" ] && [ -n "${CLIENT_ID:-}" ]; then
   echo "Fetching token from Keycloak ($KEYCLOAK_TOKEN_URL)..."
   TOKEN=$(curl -s -X POST "$KEYCLOAK_TOKEN_URL" \
@@ -89,7 +73,7 @@ if [ -z "${TOKEN:-}" ] && [ -n "${CLIENT_ID:-}" ]; then
 fi
 
 if [ -z "${TOKEN:-}" ]; then
-  echo "ERROR: no Bearer token. Set TOKEN=..., MCP_USER=rayray, or CLIENT_ID + CLIENT_SECRET." >&2
+  echo "ERROR: no Bearer token. Set TOKEN=... or CLIENT_ID + CLIENT_SECRET." >&2
   echo "       (/mcp/ is auth-guarded; only /health is public.)" >&2
   echo "       Token issuer must match OAUTH_ISSUER_URL ($OAUTH_ISSUER_URL)." >&2
   exit 1
