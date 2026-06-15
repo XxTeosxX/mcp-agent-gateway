@@ -1,14 +1,19 @@
 import os
 
+from cryptography.fernet import Fernet
+
 os.environ.setdefault("OTEL_SDK_DISABLED", "true")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
+# Required at startup (instantiated unconditionally); generate ephemeral test keys
+# so the suite is self-contained without a local .env.
+os.environ.setdefault("GOOGLE_TOKEN_ENCRYPTION_KEY", Fernet.generate_key().decode())
+os.environ.setdefault("SLACK_TOKEN_ENCRYPTION_KEY", Fernet.generate_key().decode())
 
 import time
 from unittest.mock import patch
 
 import jwt
 import pytest
-from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fakeredis.aioredis import FakeRedis
 from fastapi.testclient import TestClient
