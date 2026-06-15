@@ -1,6 +1,6 @@
 # Test coverage
 
-**238 tests passing · 93% line coverage** (1309 statements, 89 uncovered).
+**257 tests passing · 93% line coverage** (1351 statements, 91 uncovered).
 
 Reproduce locally:
 
@@ -18,15 +18,17 @@ no credentials, and no running stack are required.
 |---|---:|---:|---:|
 | `api/usage_router.py` | 28 | 0 | 100% |
 | `api/webhooks_router.py` | 39 | 3 | 92% |
-| `authorization/router.py` | 48 | 0 | 100% |
+| `authorization/pkce.py` | 16 | 2 | 88% |
+| `authorization/router.py` | 68 | 0 | 100% |
 | `config.py` | 42 | 0 | 100% |
-| `identity/client_registration/models.py` | 72 | 10 | 86% |
+| `identity/client_registration/models.py` | 73 | 10 | 86% |
 | `identity/client_registration/registrar.py` | 24 | 4 | 83% |
-| `identity/client_registration/repository.py` | 12 | 0 | 100% |
+| `identity/client_registration/repository.py` | 17 | 0 | 100% |
 | `identity/jwks_client.py` | 8 | 1 | 88% |
 | `identity/protected_resource.py` | 7 | 0 | 100% |
 | `identity/token_validator.py` | 28 | 18 | 36% |
 | `integrations/base.py` | 2 | 2 | 0% |
+| `integrations/google/constants.py` | 3 | 0 | 100% |
 | `integrations/google/drive_client.py` | 46 | 0 | 100% |
 | `integrations/google/drive_query.py` | 18 | 0 | 100% |
 | `integrations/google/job_tools.py` | 49 | 7 | 86% |
@@ -35,6 +37,7 @@ no credentials, and no running stack are required.
 | `integrations/google/prompts.py` | 12 | 0 | 100% |
 | `integrations/google/token_store.py` | 43 | 1 | 98% |
 | `integrations/google/tools.py` | 105 | 20 | 81% |
+| `integrations/slack/constants.py` | 1 | 0 | 100% |
 | `integrations/slack/signature.py` | 16 | 0 | 100% |
 | `integrations/slack/slack_client.py` | 35 | 0 | 100% |
 | `integrations/slack/token_store.py` | 31 | 0 | 100% |
@@ -57,7 +60,7 @@ no credentials, and no running stack are required.
 | `shared/redis.py` | 5 | 0 | 100% |
 | `shared/store.py` | 44 | 3 | 93% |
 | `shared/usage.py` | 37 | 0 | 100% |
-| **TOTAL** | **1309** | **89** | **93%** |
+| **TOTAL** | **1351** | **91** | **93%** |
 
 ## Notable gaps
 

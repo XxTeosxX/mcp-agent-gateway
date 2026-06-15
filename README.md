@@ -245,6 +245,8 @@ Built-in defenses:
 
 ## Quick start
 
+> Install [`just`](https://github.com/casey/just) first (the commands below use it). You also need [`uv`](https://github.com/astral-sh/uv) and Docker.
+
 ```bash
 just deps        # uv sync
 just docker-up   # Keycloak + Redis
@@ -279,13 +281,13 @@ If you obtain tokens through the gateway's `/oauth/authorize` endpoint, the foll
 
 ### Smoke test the whole MCP flow (`test-api.sh`)
 
-`app/test-api.sh` (at the `app/` submodule root) drives the full Streamable-HTTP handshake against a
+`test-api.sh` (at the repo root) drives the full Streamable-HTTP handshake against a
 running stack — health → `initialize` → `notifications/initialized` → `tools/list` →
 `drive-list-recent` + `drive-search-files` calls → `prompts/list` → `prompts/get
 drive-find-document`. It fetches its own Bearer token; pick one of two credential modes:
 
 ```bash
-# Run from the app/ submodule root. Use bash (the script needs arrays/herestrings + `set -euo pipefail`).
+# Run from the repo root. Use bash (the script needs arrays/herestrings + `set -euo pipefail`).
 CLIENT_ID=mcp-test CLIENT_SECRET=local-dev-only-not-secret bash test-api.sh  # client_credentials
 TOKEN=eyJ...    bash test-api.sh   # bring your own JWT
 ```
@@ -308,17 +310,19 @@ Notes:
 
 ### Seed users & access (local RBAC)
 
-The local Keycloak realm (`mcp-gateway`) is seeded with three test users; passwords
-and roles are defined in `compose/local/keycloak/realm.json`. Access to each
-integration's MCP tools is gated by a per-client role — `drive-user` unlocks the
-Drive tools, `slack-user` unlocks the Slack tools. A user only sees the tools their
+The local Keycloak realm (`mcp-gateway`) is seeded with four test users; passwords
+and roles are defined in `compose/local/keycloak/realm.json`. Access is gated by a
+per-client role that maps to a gateway scope — `drive-user` → `mcp:google:read`
+(Drive tools), `slack-user` → `mcp:slack:read` (Slack tools), `admin-user` →
+`mcp:admin:read` (the `/admin/usage/{user_id}` API). A user only sees the tools their
 roles grant.
 
-| User | Roles | Drive tools | Slack tools |
-|---|---|---|---|
-| `june` | `drive-user` | ✅ | ❌ |
-| `rayray` | `drive-user`, `slack-user` | ✅ | ✅ |
-| `jasmine` | `slack-user` | ❌ | ✅ |
+| User | Roles | Drive tools | Slack tools | Admin usage API |
+|---|---|---|---|---|
+| `june` | `drive-user` | ✅ | ❌ | ❌ |
+| `rayray` | `drive-user`, `slack-user` | ✅ | ✅ | ❌ |
+| `jasmine` | `slack-user` | ❌ | ✅ | ❌ |
+| `admin` | `admin-user` | ❌ | ❌ | ✅ |
 
 ```bash
 # User-scoped tokens must be obtained via authorization_code + PKCE (browser flow).
@@ -344,11 +348,11 @@ application aborts startup if `REDIS_URL` is missing.
 | `REDIS_URL` | **yes** | Redis/Valkey connection string (e.g. `redis://localhost:6379`) |
 | `OAUTH_ISSUER_URL` | **yes** | OpenID issuer that signs the downstream JWTs |
 | `OAUTH_EXPECTED_AUDIENCE` | **yes** | Audience the gateway expects in the JWT (default matches local Keycloak) |
-| `GOOGLE_TOKEN_ENCRYPTION_KEY` | when Drive enabled | Fernet key for the shared Google refresh token |
+| `GOOGLE_TOKEN_ENCRYPTION_KEY` | **yes** | Fernet key — instantiated unconditionally at startup, so the app aborts without it |
 | `GOOGLE_CLIENT_ID` | when Drive enabled | OAuth client ID used to refresh the shared token |
 | `GOOGLE_CLIENT_SECRET` | when Drive enabled | OAuth client secret used to refresh the shared token |
 | `GOOGLE_SHARED_REFRESH_TOKEN` | when Drive enabled | Refresh token from `gcloud` (see Drive provisioning above) |
-| `SLACK_TOKEN_ENCRYPTION_KEY` | when Slack enabled | Fernet key for shared Slack tokens |
+| `SLACK_TOKEN_ENCRYPTION_KEY` | **yes** | Fernet key — instantiated unconditionally at startup, so the app aborts without it |
 | `SLACK_SHARED_BOT_TOKEN` | when Slack enabled | `xoxb-` token for `slack-send-message` |
 | `SLACK_SHARED_USER_TOKEN` | for Slack search | `xoxp-` token for `slack-search-messages` |
 | `SLACK_SIGNING_SECRET` | for webhooks | Verifies inbound Slack webhook HMAC |

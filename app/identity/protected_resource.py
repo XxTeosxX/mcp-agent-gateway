@@ -13,8 +13,9 @@ async def oauth_protected_resource_metadata() -> JSONResponse:
             "resource": settings.OAUTH_EXPECTED_AUDIENCE,
             "authorization_servers": [settings.GATEWAY_BASE_URL],
             "scopes_supported": [
-                "mcp:tools:read",
-                "mcp:tools:write",
+                "mcp:google:read",
+                "mcp:slack:read",
+                "mcp:admin:read",
             ],
         }
     )

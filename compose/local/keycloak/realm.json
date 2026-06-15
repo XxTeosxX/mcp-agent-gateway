@@ -411,6 +411,10 @@
         {
           "name": "slack-user",
           "description": "May use Slack tools"
+        },
+        {
+          "name": "admin-user",
+          "description": "May read the admin usage API (mcp:admin:read)"
         }
       ]
     }
@@ -558,6 +562,31 @@
       "clientRoles": {
         "mcp-gateway": [
           "slack-user"
+        ]
+      }
+    },
+    {
+      "id": "e27e3aee-7683-54be-93d8-9caf8218b0cd",
+      "username": "admin",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "admin@example.com",
+      "firstName": "Admin",
+      "lastName": "Test",
+      "requiredActions": [],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "admin-pass",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "default-roles-mcp-gateway"
+      ],
+      "clientRoles": {
+        "mcp-gateway": [
+          "admin-user"
         ]
       }
     }

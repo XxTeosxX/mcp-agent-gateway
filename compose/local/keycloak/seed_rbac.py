@@ -49,12 +49,14 @@ CLIENT = {
 CLIENT_ROLES = [
     {"name": "drive-user", "description": "May use Google Drive tools"},
     {"name": "slack-user", "description": "May use Slack tools"},
+    {"name": "admin-user", "description": "May read the admin usage API (mcp:admin:read)"},
 ]
 
 USERS = [
     ("june", "june-pass", ["drive-user"]),
     ("rayray", "rayray-pass", ["drive-user", "slack-user"]),
     ("jasmine", "jasmine-pass", ["slack-user"]),
+    ("admin", "admin-pass", ["admin-user"]),
 ]
 
 

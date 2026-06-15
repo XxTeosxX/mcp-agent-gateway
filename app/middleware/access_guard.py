@@ -6,7 +6,7 @@ from app.config import settings
 from app.identity.token_validator import token_validator
 from app.shared.context import current_user_id, current_user_scopes
 
-_SCOPES = "mcp:tools:read mcp:tools:write"
+_SCOPES = "mcp:google:read mcp:slack:read mcp:admin:read"
 
 # Keycloak client `mcp-gateway` roles → gateway scopes. The role is the source
 # of truth; downstream code reads only scopes.
@@ -14,6 +14,7 @@ _CLIENT_ID = "mcp-gateway"
 _ROLE_SCOPE_MAP = {
     "drive-user": "mcp:google:read",
     "slack-user": "mcp:slack:read",
+    "admin-user": "mcp:admin:read",
 }
 
 _AUTH_BYPASS_EXACT = frozenset(

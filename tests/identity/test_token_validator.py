@@ -25,8 +25,9 @@ class TestOAuthProtectedResourceMetadata:
     def test_scopes_supported(self, client: TestClient) -> None:
         resp = client.get("/.well-known/oauth-protected-resource")
         scopes = resp.json()["scopes_supported"]
-        assert "mcp:tools:read" in scopes
-        assert "mcp:tools:write" in scopes
+        assert "mcp:google:read" in scopes
+        assert "mcp:slack:read" in scopes
+        assert "mcp:admin:read" in scopes
 
 
 class TestAuthBypass:
