@@ -58,6 +58,7 @@ class ClientMetadata(BaseModel):
 class RegisteredClient(BaseModel):
     client_id: str
     client_secret: str
+    redirect_uris: list[str]
 
 
 class ClientMetadataFetchError(Exception):

@@ -4,6 +4,7 @@ import httpx
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
+from app.authorization.pkce import validate_pkce_params
 from app.config import settings
 from app.identity.client_registration import repository as client_repository
 from app.identity.client_registration.models import (
@@ -36,6 +37,27 @@ def _error_response(error: str, description: str | None = None) -> JSONResponse:
     return JSONResponse(status_code=400, content=body)
 
 
+def _authorize_params_valid(params: dict) -> tuple[bool, str]:
+    """OAuth 2.1 authorization request validation.
+
+    Returns (ok, error_description). On failure the caller must return
+    invalid_request without redirecting.
+    """
+    if not params.get("client_id"):
+        return False, "client_id is required"
+    if params.get("response_type") != "code":
+        return False, "response_type must be code"
+    if not params.get("redirect_uri"):
+        return False, "redirect_uri is required"
+    if not params.get("state"):
+        return False, "state is required"
+    try:
+        validate_pkce_params(params.get("code_challenge"), params.get("code_challenge_method"))
+    except ValueError as exc:
+        return False, str(exc)
+    return True, ""
+
+
 @router.get("/.well-known/oauth-authorization-server")
 async def oauth_authorization_server_metadata() -> JSONResponse:
     return JSONResponse(
@@ -55,14 +77,19 @@ async def oauth_authorization_server_metadata() -> JSONResponse:
     )
 
 
-@router.get("/oauth/authorize")
+@router.get("/oauth/authorize", response_model=None)
 async def authorize(
     request: Request,
     registry: Store = Depends(get_client_registry),
-) -> RedirectResponse:
+) -> RedirectResponse | JSONResponse:
     params = dict(request.query_params)
     client_id = params.get("client_id", "")
     redirect_uri = params.get("redirect_uri", "")
+
+    # OAuth 2.1 requires PKCE, state, and a redirect_uri before any redirect.
+    ok, description = _authorize_params_valid(params)
+    if not ok:
+        return _error_response("invalid_request", description)
 
     if _is_url(client_id):
         try:
@@ -76,6 +103,9 @@ async def authorize(
                 registered = await enroll_mcp_client(metadata)
                 await client_repository.set(client_id, registered, registry)
                 cached = registered
+            elif redirect_uri not in cached.redirect_uris:
+                # Cached DCR registrations must still enforce the redirect_uri allowlist.
+                return _error_response("invalid_request", "redirect_uri_not_in_metadata")
             params["client_id"] = cached.client_id
         except ClientMetadataFetchError:
             return _error_response("invalid_client", "metadata_fetch_failed")

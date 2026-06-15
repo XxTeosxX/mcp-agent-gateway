@@ -36,4 +36,8 @@ async def enroll_mcp_client(
         raise DcrRegistrationError(f"DCR request error: {exc}") from exc
 
     data = resp.json()
-    return RegisteredClient(client_id=data["client_id"], client_secret=data["client_secret"])
+    return RegisteredClient(
+        client_id=data["client_id"],
+        client_secret=data["client_secret"],
+        redirect_uris=metadata.redirect_uris,
+    )

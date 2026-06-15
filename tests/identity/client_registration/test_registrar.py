@@ -42,6 +42,7 @@ class TestRegisterClient:
         assert isinstance(result, RegisteredClient)
         assert result.client_id == "generated-abc"
         assert result.client_secret == "secret-xyz"
+        assert result.redirect_uris == _METADATA.redirect_uris
 
     async def test_raises_on_provider_401(self):
         with pytest.raises(DcrRegistrationError, match="401"):

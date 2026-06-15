@@ -4,7 +4,11 @@ from app.identity.client_registration.models import RegisteredClient
 from app.identity.client_registration.repository import get, set as registry_set
 from app.shared.store import InMemoryStore
 
-_RESULT = RegisteredClient(client_id="kc-abc", client_secret="secret-xyz")
+_RESULT = RegisteredClient(
+    client_id="kc-abc",
+    client_secret="secret-xyz",
+    redirect_uris=["https://myapp.com/callback"],
+)
 _URL = "https://myapp.com/client-metadata.json"
 
 
@@ -25,13 +29,24 @@ class TestClientRegistry:
         assert result is not None
         assert result.client_id == "kc-abc"
         assert result.client_secret == "secret-xyz"
+        assert result.redirect_uris == ["https://myapp.com/callback"]
 
     @pytest.mark.asyncio
     async def test_different_urls_do_not_collide(self, store):
-        other = RegisteredClient(client_id="other-id", client_secret="other-secret")
+        other = RegisteredClient(
+            client_id="other-id",
+            client_secret="other-secret",
+            redirect_uris=["https://otherapp.com/callback"],
+        )
         await registry_set(_URL, _RESULT, store)
         await registry_set("https://otherapp.com/meta.json", other, store)
         r1 = await get(_URL, store)
         r2 = await get("https://otherapp.com/meta.json", store)
         assert r1.client_id == "kc-abc"
         assert r2.client_id == "other-id"
+
+    @pytest.mark.asyncio
+    async def test_legacy_cached_entry_without_redirect_uris_is_treated_as_miss(self, store):
+        """Old cache entries serialized before redirect_uris was added must be ignored."""
+        await store.set(_URL, '{"client_id": "kc-abc", "client_secret": "secret-xyz"}')
+        assert await get(_URL, store) is None
