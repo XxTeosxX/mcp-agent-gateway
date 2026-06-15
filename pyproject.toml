@@ -5,7 +5,7 @@ description = "Secure MCP gateway giving AI agents audited, least-privilege acce
 requires-python = ">=3.13"
 dependencies = [
     "authlib>=1.7.2",
-    "cryptography>=48.0.0",
+    "cryptography>=48.0.1",
     "fastapi>=0.115.0",
     "httpx>=0.28.1",
     "mcp>=1.0",
