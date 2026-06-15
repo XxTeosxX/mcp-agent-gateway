@@ -54,14 +54,15 @@ class Settings(BaseSettings):
     GOOGLE_DRIVE_MAX_KEEPALIVE: int = 20
     GOOGLE_DRIVE_MAX_RETRIES: int = 3
 
-    SLACK_CLIENT_ID: str = ""
-    SLACK_CLIENT_SECRET: str = ""
     SLACK_TOKEN_ENCRYPTION_KEY: str = ""
-    SLACK_REDIRECT_URI: str = "http://localhost:8000/auth/slack/callback"
 
     SLACK_TIMEOUT: float = 8.0
     SLACK_MAX_RETRIES: int = 3
     SLACK_SIGNING_SECRET: str = ""
+    # Shared Slack identity, provisioned via a single-workspace app install.
+    # Seeded into slack:token:shared at boot. xoxb- = bot, xoxp- = user.
+    SLACK_SHARED_BOT_TOKEN: str = ""
+    SLACK_SHARED_USER_TOKEN: str = ""
 
     EXPORT_DIR: str = Field(default_factory=lambda: os.path.join(tempfile.gettempdir(), "mcp-exports"))
 

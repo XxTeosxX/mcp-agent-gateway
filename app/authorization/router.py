@@ -1,4 +1,3 @@
-import logging
 from urllib.parse import urlparse
 
 import httpx
@@ -13,20 +12,8 @@ from app.identity.client_registration.models import (
     fetch_client_metadata,
 )
 from app.identity.client_registration.registrar import DcrRegistrationError, enroll_mcp_client
-from app.integrations.slack.oauth_flow import (
-    OAuthStateError as SlackOAuthStateError,
-    build_authorization_url as build_slack_authorization_url,
-    handle_callback as handle_slack_callback,
-)
-from app.shared.dependencies import (
-    get_client_registry,
-    get_http_client,
-    get_oauth_state_store,
-    get_slack_token_store,
-)
+from app.shared.dependencies import get_client_registry
 from app.shared.store import Store
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["authorization"])
 
@@ -94,31 +81,3 @@ async def authorize(
     keycloak_authorize = f"{settings.OAUTH_ISSUER_URL}/protocol/openid-connect/auth"
     target = httpx.URL(keycloak_authorize).copy_with(params=params)
     return RedirectResponse(str(target), status_code=302)
-
-
-@router.post("/auth/slack/initiate")
-async def slack_initiate(
-    request: Request,
-    state_store: Store = Depends(get_oauth_state_store),
-) -> JSONResponse:
-    user_id: str = request.state.user["id"]
-    authorization_url, state = await build_slack_authorization_url(user_id, state_store)
-    return JSONResponse({"authorization_url": authorization_url, "state": state})
-
-
-@router.get("/auth/slack/callback")
-async def slack_callback(
-    state: str,
-    code: str,
-    client: httpx.AsyncClient = Depends(get_http_client),
-    state_store: Store = Depends(get_oauth_state_store),
-    token_store: Store = Depends(get_slack_token_store),
-) -> JSONResponse:
-    try:
-        await handle_slack_callback(state, code, client, state_store, token_store)
-    except SlackOAuthStateError:
-        return JSONResponse(status_code=400, content={"detail": "Invalid or expired state"})
-    except Exception:
-        logger.exception("Slack OAuth callback failed")
-        return JSONResponse(status_code=500, content={"detail": "Authorization failed"})
-    return JSONResponse({"status": "authorized"})

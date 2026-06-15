@@ -28,7 +28,7 @@ def test_fail_open_when_rate_check_errors(client, rsa_key, monkeypatch):
     async def boom(*args, **kwargs):
         raise RuntimeError("redis down")
 
-    monkeypatch.setattr("app.gateway.middleware.rate_limiter.check_rate_limit", boom)
+    monkeypatch.setattr("app.middleware.rate_limiter.check_rate_limit", boom)
     headers = _auth(rsa_key)
 
     for _ in range(3):

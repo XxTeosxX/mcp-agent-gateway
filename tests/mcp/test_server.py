@@ -8,9 +8,9 @@ from fakeredis.aioredis import FakeRedis
 from fastapi.testclient import TestClient
 from mcp import types
 
-from app.gateway.context import current_user_scopes
-from app.gateway.server import TOOL_SCOPE, handle_list_tools, visible_tools
 from app.main import app
+from app.mcp.server import TOOL_SCOPE, handle_list_tools, visible_tools
+from app.shared.context import current_user_scopes
 from tests.conftest import make_token
 
 
@@ -198,9 +198,9 @@ class TestMCPIntegration:
 
 
 def test_required_scope_constants():
-    from app.gateway.tools.drive_tools import DRIVE_REQUIRED_SCOPE
-    from app.gateway.tools.job_tools import JOB_REQUIRED_SCOPE
-    from app.gateway.tools.slack_tools import SLACK_REQUIRED_SCOPE
+    from app.integrations.google.job_tools import JOB_REQUIRED_SCOPE
+    from app.integrations.google.tools import DRIVE_REQUIRED_SCOPE
+    from app.integrations.slack.tools import SLACK_REQUIRED_SCOPE
 
     assert DRIVE_REQUIRED_SCOPE == "mcp:google:read"
     assert JOB_REQUIRED_SCOPE == "mcp:google:read"  # async Drive capabilities

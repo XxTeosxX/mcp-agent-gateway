@@ -1,7 +1,7 @@
 import pytest
 
-from app.gateway.context import current_user_scopes
-from app.gateway.server import handle_list_tools
+from app.mcp.server import handle_list_tools
+from app.shared.context import current_user_scopes
 
 
 @pytest.mark.asyncio
@@ -16,15 +16,10 @@ async def test_list_tools_includes_slack():
     assert "drive-search-files" in names
 
 
-def test_dependency_getter_imports():
-    from app.shared.dependencies import get_slack_token_store
-
-    assert callable(get_slack_token_store)
-
-
-def test_router_has_slack_routes():
+def test_router_has_no_slack_oauth_routes():
+    # 3-legged Slack OAuth removed — only the shared-token model remains.
     from app.authorization.router import router
 
     paths = {r.path for r in router.routes}
-    assert "/auth/slack/initiate" in paths
-    assert "/auth/slack/callback" in paths
+    assert "/auth/slack/initiate" not in paths
+    assert "/auth/slack/callback" not in paths

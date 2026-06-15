@@ -4,11 +4,11 @@ import pytest
 import respx
 from httpx import Response
 
-from app.gateway.context import current_user_id
-from app.gateway.tools.drive_tools import handle_drive_search_files
-from app.gateway.tools.slack_tools import handle_slack_send_message
 from app.integrations.google.drive_client import drive_client
+from app.integrations.google.tools import handle_drive_search_files
 from app.integrations.slack.slack_client import slack_client
+from app.integrations.slack.tools import handle_slack_send_message
+from app.shared.context import current_user_id
 
 GOOGLE_UPSTREAM_TOKEN = "ya29.GOOGLE_UPSTREAM_TOKEN_FOR_USER"
 SLACK_BOT_TOKEN = "xoxb-slack-bot-token-xyz789"
@@ -44,7 +44,7 @@ async def test_drive_tool_never_sends_downstream_jwt_upstream():
         )
 
         with patch(
-            "app.gateway.tools.drive_tools._get_drive_token",
+            "app.integrations.google.tools._get_drive_token",
             new_callable=AsyncMock,
             return_value=GOOGLE_UPSTREAM_TOKEN,
         ):
@@ -67,7 +67,7 @@ async def test_slack_tool_never_sends_downstream_jwt_upstream():
         )
 
         with patch(
-            "app.gateway.tools.slack_tools._get_slack_token",
+            "app.integrations.slack.tools._get_slack_token",
             new_callable=AsyncMock,
             return_value=SLACK_BOT_TOKEN,
         ):

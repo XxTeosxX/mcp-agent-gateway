@@ -3,8 +3,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
 from app.config import settings
-from app.gateway.context import current_user_id, current_user_scopes
 from app.identity.token_validator import token_validator
+from app.shared.context import current_user_id, current_user_scopes
 
 _SCOPES = "mcp:tools:read mcp:tools:write"
 

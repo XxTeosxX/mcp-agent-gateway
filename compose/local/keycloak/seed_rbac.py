@@ -52,9 +52,9 @@ CLIENT_ROLES = [
 ]
 
 USERS = [
-    ("joao", "joao-pass", ["drive-user"]),
-    ("maria", "maria-pass", ["drive-user", "slack-user"]),
-    ("roger", "roger-pass", ["slack-user"]),
+    ("june", "june-pass", ["drive-user"]),
+    ("rayray", "rayray-pass", ["drive-user", "slack-user"]),
+    ("jasmine", "jasmine-pass", ["slack-user"]),
 ]
 
 
@@ -65,9 +65,10 @@ def _user(username: str, password: str, roles: list[str]) -> dict:
         "enabled": True,
         "emailVerified": True,
         "email": f"{username}@example.com",
-        "credentials": [
-            {"type": "password", "value": password, "temporary": False}
-        ],
+        "firstName": username.title(),
+        "lastName": "Test",
+        "requiredActions": [],
+        "credentials": [{"type": "password", "value": password, "temporary": False}],
         "realmRoles": ["default-roles-mcp-gateway"],
         "clientRoles": {CLIENT_ID: roles},
     }

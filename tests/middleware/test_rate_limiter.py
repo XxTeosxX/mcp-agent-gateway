@@ -3,7 +3,7 @@ import math
 import pytest
 from fakeredis.aioredis import FakeRedis
 
-from app.gateway.middleware.rate_limiter import check_rate_limit
+from app.middleware.rate_limiter import check_rate_limit
 
 
 @pytest.fixture

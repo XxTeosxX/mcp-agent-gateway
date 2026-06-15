@@ -5,14 +5,14 @@ from collections.abc import Awaitable, Callable
 from mcp import types
 from pydantic import BaseModel, Field, ValidationError
 
-from app.gateway.usage import track_usage
 from app.integrations.google.drive_client import drive_client as _drive_client
 from app.integrations.google.token_store import (
     _GOOGLE_SHARED_USER,
     OAuthTokenNotFoundError,
     get_valid_google_token,
+    token_store,
 )
-from app.shared.store import token_store
+from app.shared.usage import track_usage
 
 logger = logging.getLogger(__name__)
 

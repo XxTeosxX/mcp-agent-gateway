@@ -5,7 +5,7 @@ import time
 
 import tiktoken
 
-from app.gateway.context import current_user_id
+from app.shared.context import current_user_id
 
 logger = logging.getLogger("app.usage")
 

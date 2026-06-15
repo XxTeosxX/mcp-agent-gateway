@@ -1,7 +1,7 @@
 import pytest
 from fakeredis.aioredis import FakeRedis
 
-from app.gateway.jobs import (
+from app.integrations.google.jobs import (
     JOBS_STREAM,
     enqueue_export_job,
     ensure_group,

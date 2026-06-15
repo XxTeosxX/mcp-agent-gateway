@@ -3,16 +3,16 @@ import json
 import pytest
 from cryptography.fernet import Fernet
 
-from app.gateway.context import current_user_id
-from app.gateway.tools.slack_tools import (
+from app.config import settings
+from app.integrations.slack.slack_client import SlackAPIError, slack_client
+from app.integrations.slack.token_store import _SLACK_SHARED_USER, slack_token_store
+from app.integrations.slack.tools import (
     SLACK_REGISTRY,
     SLACK_TOOLS,
     handle_slack_search_messages,
     handle_slack_send_message,
 )
-from app.integrations.slack.slack_client import SlackAPIError, slack_client
-from app.integrations.slack.token_store import persist_tokens
-from app.shared.store import InMemoryStore, slack_token_store
+from app.shared.store import InMemoryStore
 
 
 @pytest.fixture(autouse=True)
@@ -22,24 +22,23 @@ def slack_settings(monkeypatch):
 
 
 @pytest.fixture
-def authorized_user(monkeypatch):
+def authorized_user():
     store = InMemoryStore()
     slack_token_store.init(store)
-    token = current_user_id.set("user-1")
-    yield store
-    current_user_id.reset(token)
+    return store
 
 
 async def _authorize(store):
-    await persist_tokens(
-        "user-1",
-        {
-            "ok": True,
-            "access_token": "xoxb-bot",
-            "authed_user": {"access_token": "xoxp-user"},
-            "team": {"id": "T1"},
-        },
-        store,
+    f = Fernet(settings.SLACK_TOKEN_ENCRYPTION_KEY.encode())
+    await store.set(
+        _SLACK_SHARED_USER,
+        json.dumps(
+            {
+                "bot_token_enc": f.encrypt(b"xoxb-bot").decode(),
+                "user_token_enc": f.encrypt(b"xoxp-user").decode(),
+                "team_id": "T1",
+            }
+        ),
     )
 
 
@@ -58,11 +57,7 @@ async def test_send_message_invalid_input_returns_error():
 @pytest.mark.asyncio
 async def test_send_message_not_authorized():
     slack_token_store.init(InMemoryStore())
-    token = current_user_id.set("user-nobody")
-    try:
-        result = await handle_slack_send_message({"channel": "C1", "text": "hi"})
-    finally:
-        current_user_id.reset(token)
+    result = await handle_slack_send_message({"channel": "C1", "text": "hi"})
     assert result.isError is True
     assert "not authorized" in result.content[0].text
 

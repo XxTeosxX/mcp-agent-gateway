@@ -1,5 +1,5 @@
-from app.gateway.tools.drive_tools import DRIVE_REGISTRY
-from app.gateway.tools.slack_tools import SLACK_REGISTRY
+from app.integrations.google.tools import DRIVE_REGISTRY
+from app.integrations.slack.tools import SLACK_REGISTRY
 
 
 def test_all_tool_handlers_are_wrapped_by_track_usage():

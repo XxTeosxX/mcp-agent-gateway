@@ -160,6 +160,38 @@ itself, so the protocol traffic is authenticated like everything else.
 Inbound: `POST /webhooks/slack` — HMAC-verified, replay-guarded, idempotent fan-out to a
 `events:slack` stream.
 
+> [!NOTE]
+> **Bot token via env var — no per-user consent needed (unlike Drive).** A Slack
+> bot token (`xoxb-`) is workspace-level: it represents the app, not a person, so
+> a single shared token is the natural model — and Slack imposes **no app-review
+> or verification gate** for a single-workspace install, so this works on the
+> **free Slack plan**.
+>
+> **Provisioning (once):**
+> 1. Create an app at [api.slack.com/apps](https://api.slack.com/apps).
+> 2. Add a **Bot User** and the bot scopes the tools need (e.g. `chat:write`,
+>    `channels:read`, `search:read`).
+> 3. **Install to Workspace** — you approve it yourself as workspace admin; no
+>    Slack review.
+> 4. Copy the **Bot User OAuth Token** (`xoxb-…`) into `.env` as
+>    `SLACK_SHARED_BOT_TOKEN`.
+>
+> On boot the gateway seeds `slack:token:shared` from `SLACK_SHARED_BOT_TOKEN`
+> and `SLACK_SHARED_USER_TOKEN` (only if absent — rotation-safe), mirroring the
+> Drive `google:shared` seed. Token rotation is **off by default**, so the tokens
+> do not expire — no refresh logic required. The Slack tools always resolve this
+> shared identity (`_SLACK_SHARED_USER`), just as the Drive tools resolve
+> `_GOOGLE_SHARED_USER`.
+>
+> Add `SLACK_SHARED_USER_TOKEN` (`xoxp-…`, scope `search:read`) alongside the bot
+> token so `slack-search-messages` works — `search.messages` rejects bot tokens.
+> Both are Fernet-encrypted at rest, so `SLACK_TOKEN_ENCRYPTION_KEY` must be set
+> whenever a shared token is provisioned.
+>
+> The per-user 3-legged OAuth flow (`/auth/slack/initiate` → callback) stays the
+> right choice only when a tool must act **as a specific user** (`xoxp-` user
+> token) rather than as the bot.
+
 ---
 
 ## Security posture
@@ -201,6 +233,29 @@ curl -X POST http://localhost:8000/mcp/ \
   -d '{"jsonrpc":"2.0","method":"tools/call","id":1,
        "params":{"name":"drive-search-files","arguments":{"query":"contract","max_results":10}}}'
 ```
+
+### Seed users & access (local RBAC)
+
+The local Keycloak realm (`mcp-gateway`) is seeded with three test users. Access to
+each integration's MCP tools is gated by a per-client role — `drive-user` unlocks the
+Drive tools, `slack-user` unlocks the Slack tools. A user only sees the tools their
+roles grant.
+
+| User | Password | Roles | Drive tools | Slack tools |
+|---|---|---|---|---|
+| `june` | `june-pass` | `drive-user` | ✅ | ❌ |
+| `rayray` | `rayray-pass` | `drive-user`, `slack-user` | ✅ | ✅ |
+| `jasmine` | `jasmine-pass` | `slack-user` | ❌ | ✅ |
+
+```bash
+# log in as a seed user (mcp-gateway realm) and call a tool with that user's scope
+TOKEN=$(curl -s -X POST http://localhost:8080/realms/mcp-gateway/protocol/openid-connect/token \
+  -d grant_type=password -d client_id=mcp-gateway \
+  -d username=rayray -d password=rayray-pass | jq -r .access_token)
+```
+
+> Seeded from `compose/local/keycloak/realm.json` (and `seed_rbac.py`). Edit those to
+> change the roster, then re-run `just docker-up`.
 
 ---
 
@@ -267,6 +322,64 @@ just ci         # everything
 </p>
 
 Also: **httpx** + **tenacity** (resilient upstream calls) · **PyJWT** (RS256/JWKS) · **cryptography** (Fernet) · **tiktoken** (token counting) · **structlog** (JSON logs).
+
+---
+
+## Observability — necessary improvements
+
+The goal is to **follow a user's journey end-to-end** — both the requests that
+succeed and the ones that fail. We have two halves of the picture, and they are
+not yet joined.
+
+### What already works
+
+- **Structured request log.** The middleware emits one JSON event per request
+  (`method`, `path`, `status`, `duration_ms`, `request_id`, `trace_id`,
+  `span_id`), and a sensitive-data filter scrubs bearer/Slack/refresh tokens.
+- **OpenTelemetry is wired and running.** The containers start under
+  `opentelemetry-instrument` (`compose/*/fastapi/start`), with FastAPI and httpx
+  auto-instrumentation and an OTLP/HTTP exporter. This means, for free:
+  - a **server span per request**,
+  - a **client span per upstream call** (Drive/Slack) carrying the upstream
+    status and latency — so "what did the upstream do" is already captured *in
+    traces*, even though the clients log nothing,
+  - `trace_id`/`span_id` already stamped onto the request log event, so that one
+    line is trace-correlated today.
+
+So the upstream-visibility and request-correlation gaps are largely solved **at
+the trace layer**. The work left is to make the rest of the journey — identity,
+the tool that ran, logical failures, and the scattered logs — correlate too.
+
+### What still needs adjusting, even with OTel on
+
+OTel does not magically enrich anything (it is a delivery mechanism, not a
+decision about *what* to record). These remain to be done:
+
+1. **Enrich the span with journey context.** The server span exists but is bare.
+   Grab `get_current_span()` and set `user.id`, `mcp.tool`, `mcp.provider`,
+   `scopes`, `auth.result`. Without these, traces show *that* a request happened,
+   never *who* did *what*.
+2. **Mark logical failures on the span.** MCP errors return as a JSON-RPC error
+   inside an HTTP `200`, so neither the status code nor the auto-span reflects
+   them. Tool handlers must call `span.record_exception(...)` +
+   `span.set_status(ERROR)` so a failed tool call shows up as an error trace
+   despite the 200.
+3. **Make auth failures observable.** `AccessGuard` returns `401` before the
+   request-logging middleware runs, so rejected requests produce **zero log
+   lines**. Set `auth.result`/error status on the span *and* emit a log event on
+   every `401` with a reason (`no_bearer`, `invalid_token`, validation class).
+4. **Correlate the scattered logs.** Usage, rate-limiter, job-worker, and
+   Slack-OAuth-callback logs carry no `trace_id`/`user.id`, so they can't be
+   joined to the request. Turn on the distro's log correlation
+   (`OTEL_PYTHON_LOG_CORRELATION=true`) to auto-stamp `otelTraceID`/`otelSpanID`
+   onto every log record — one env var, no call-site changes.
+5. **Record the success paths, not just failures.** Rate-limit blocks, completed
+   export jobs, and successful OAuth callbacks log only on failure today; add the
+   success side as span events/attributes so the happy path is queryable too.
+
+Net effect: every request becomes one trace that carries identity, the
+tool/integration touched, the upstream result, and any error — with all logs
+correlated to it — for both the journeys that succeed and the ones that fail.
 
 ## License
 

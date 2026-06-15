@@ -3,9 +3,9 @@ import json
 import pytest
 from fakeredis.aioredis import FakeRedis
 
-from app.gateway.context import current_user_id
-from app.gateway.jobs import enqueue_export_job, job_queue
-from app.gateway.tools import job_tools
+from app.integrations.google import job_tools
+from app.integrations.google.jobs import enqueue_export_job, job_queue
+from app.shared.context import current_user_id
 
 
 @pytest.fixture

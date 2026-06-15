@@ -5,15 +5,15 @@ from collections.abc import Awaitable, Callable
 from mcp import types
 from pydantic import BaseModel, Field, ValidationError
 
-from app.gateway.context import current_user_id
-from app.gateway.jobs import (
+from app.integrations.google.jobs import (
     EXPORT_FORMATS,
     enqueue_export_job,
     job_owner,
     job_queue,
     read_result,
 )
-from app.gateway.usage import track_usage
+from app.shared.context import current_user_id
+from app.shared.usage import track_usage
 
 logger = logging.getLogger(__name__)
 

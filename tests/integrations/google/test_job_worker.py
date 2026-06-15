@@ -8,10 +8,11 @@ from cryptography.fernet import Fernet
 from fakeredis.aioredis import FakeRedis
 
 from app.config import settings
-from app.gateway.job_worker import JobWorker
-from app.gateway.jobs import enqueue_export_job, read_result
 from app.integrations.google.drive_client import drive_client
-from app.shared.store import InMemoryStore, token_store
+from app.integrations.google.job_worker import JobWorker
+from app.integrations.google.jobs import enqueue_export_job, read_result
+from app.integrations.google.token_store import token_store
+from app.shared.store import InMemoryStore
 
 
 @pytest.fixture(autouse=True)
@@ -50,7 +51,7 @@ async def stored_token(encryption_key):
 
 @respx.mock
 async def test_process_completed_writes_file_and_publishes(tmp_path, stored_token):
-    from app.gateway.jobs import ensure_group
+    from app.integrations.google.jobs import ensure_group
 
     redis = FakeRedis(decode_responses=True)
     await ensure_group(redis)
@@ -75,7 +76,7 @@ async def test_process_completed_writes_file_and_publishes(tmp_path, stored_toke
 
 @respx.mock
 async def test_process_failed_publishes_failed_result(tmp_path, stored_token):
-    from app.gateway.jobs import ensure_group
+    from app.integrations.google.jobs import ensure_group
 
     redis = FakeRedis(decode_responses=True)
     await ensure_group(redis)
@@ -97,7 +98,7 @@ async def test_process_failed_publishes_failed_result(tmp_path, stored_token):
 async def test_run_loop_consumes_and_publishes(tmp_path, stored_token):
     import asyncio
 
-    from app.gateway.jobs import ensure_group
+    from app.integrations.google.jobs import ensure_group
 
     redis = FakeRedis(decode_responses=True)
     await ensure_group(redis)

@@ -4,8 +4,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
-from app.gateway.context import current_user_id, current_user_scopes
-from app.gateway.middleware.access_guard import AccessGuard
+from app.middleware.access_guard import AccessGuard
+from app.shared.context import current_user_id, current_user_scopes
 from tests.conftest import make_token
 
 

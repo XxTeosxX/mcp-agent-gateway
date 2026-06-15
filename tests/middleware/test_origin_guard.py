@@ -2,7 +2,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.gateway.middleware.origin_guard import OriginGuardMiddleware
+from app.middleware.origin_guard import OriginGuardMiddleware
 
 
 def _make_app(allowed_origins: list[str]) -> FastAPI:

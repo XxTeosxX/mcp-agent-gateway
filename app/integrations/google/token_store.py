@@ -6,7 +6,8 @@ from cryptography.fernet import Fernet
 
 from app.config import settings
 from app.integrations.google.constants import GOOGLE_TOKEN_URL
-from app.shared.store import Store
+from app.shared.exceptions import UpstreamAuthError
+from app.shared.store import Store, StoreHolder
 
 _GOOGLE_SHARED_USER = "google:shared"
 
@@ -15,11 +16,11 @@ def _fernet() -> Fernet:
     return Fernet(settings.GOOGLE_TOKEN_ENCRYPTION_KEY.encode())
 
 
-class OAuthTokenNotFoundError(Exception):
+class OAuthTokenNotFoundError(UpstreamAuthError):
     pass
 
 
-class OAuthRefreshError(Exception):
+class OAuthRefreshError(UpstreamAuthError):
     pass
 
 
@@ -84,3 +85,6 @@ async def seed_shared_token_if_absent(store: Store) -> None:
     if await store.get(_GOOGLE_SHARED_USER) is not None:
         return
     await seed_refresh_token(settings.GOOGLE_SHARED_REFRESH_TOKEN, store)
+
+
+token_store = StoreHolder()

@@ -5,11 +5,14 @@ from collections.abc import Awaitable, Callable
 from mcp import types
 from pydantic import BaseModel, Field, ValidationError
 
-from app.gateway.context import current_user_id
-from app.gateway.usage import track_usage
 from app.integrations.slack.slack_client import SlackAPIError, slack_client as _slack_client
-from app.integrations.slack.token_store import SlackTokenNotFoundError, get_valid_slack_token
-from app.shared.store import slack_token_store
+from app.integrations.slack.token_store import (
+    _SLACK_SHARED_USER,
+    SlackTokenNotFoundError,
+    get_valid_slack_token,
+    slack_token_store,
+)
+from app.shared.usage import track_usage
 
 logger = logging.getLogger(__name__)
 
@@ -62,12 +65,12 @@ def _to_match(m: dict) -> dict:
     ).model_dump()
 
 
-_NOT_AUTHORIZED = "Slack not authorized. Call POST /auth/slack/initiate to authorize your account."
+_NOT_AUTHORIZED = "Slack is not authorized. Provision SLACK_SHARED_BOT_TOKEN / SLACK_SHARED_USER_TOKEN (see README)."
 
 
 async def _get_slack_token(token_type: str) -> str | types.CallToolResult:
     try:
-        return await get_valid_slack_token(current_user_id.get(), token_type, slack_token_store.get())
+        return await get_valid_slack_token(_SLACK_SHARED_USER, token_type, slack_token_store.get())
     except SlackTokenNotFoundError:
         return _error(_NOT_AUTHORIZED)
 

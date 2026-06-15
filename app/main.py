@@ -3,19 +3,19 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from starlette.middleware.cors import CORSMiddleware
 
+from app.api.usage_router import router as usage_router
+from app.api.webhooks_router import router as webhooks_router
 from app.authorization.router import router as authorization_router
 from app.config import settings
-from app.gateway.health import router as health_router
-from app.gateway.mcp import mcp_app, mcp_lifespan
-from app.gateway.middleware.access_guard import AccessGuard
-from app.gateway.middleware.origin_guard import OriginGuardMiddleware
-from app.gateway.middleware.rate_limiter import RateLimiterMiddleware
-from app.gateway.middleware.request_logger import request_logging_middleware
-from app.gateway.middleware.security_headers import SecurityHeadersMiddleware
-from app.gateway.usage_router import router as usage_router
-from app.gateway.webhooks_router import router as webhooks_router
 from app.identity.protected_resource import router as identity_router
 from app.logging import configure_logging
+from app.mcp.app import mcp_app, mcp_lifespan
+from app.mcp.health import router as health_router
+from app.middleware.access_guard import AccessGuard
+from app.middleware.origin_guard import OriginGuardMiddleware
+from app.middleware.rate_limiter import RateLimiterMiddleware
+from app.middleware.request_logger import request_logging_middleware
+from app.middleware.security_headers import SecurityHeadersMiddleware
 from app.shared.http_client import HttpClient
 from app.shared.redis import get_redis
 from app.shared.store import RedisStore

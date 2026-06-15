@@ -5,14 +5,15 @@ from contextlib import asynccontextmanager, suppress
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from starlette.types import Receive, Scope, Send
 
-from app.gateway.job_worker import JobWorker
-from app.gateway.jobs import job_queue
-from app.gateway.server import create_session_manager
-from app.gateway.usage import usage_recorder
 from app.integrations.google.drive_client import drive_client
-from app.integrations.google.token_store import seed_shared_token_if_absent
+from app.integrations.google.job_worker import JobWorker
+from app.integrations.google.jobs import job_queue
+from app.integrations.google.token_store import seed_shared_token_if_absent, token_store
 from app.integrations.slack.slack_client import slack_client
-from app.shared.store import RedisStore, slack_token_store, token_store
+from app.integrations.slack.token_store import seed_shared_slack_tokens_if_absent, slack_token_store
+from app.mcp.server import create_session_manager
+from app.shared.store import RedisStore
+from app.shared.usage import usage_recorder
 
 
 class MCPApp:
@@ -40,6 +41,7 @@ async def mcp_lifespan(redis) -> AsyncIterator[None]:
     token_store.init(RedisStore(redis, "token:"))
     await seed_shared_token_if_absent(token_store.get())
     slack_token_store.init(RedisStore(redis, "slack:token:"))
+    await seed_shared_slack_tokens_if_absent(slack_token_store.get())
     usage_recorder.init(redis)
     job_queue.init(redis)
     worker_task = asyncio.create_task(JobWorker(redis).run())

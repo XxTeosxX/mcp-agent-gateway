@@ -7,11 +7,11 @@ from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData
 
-from app.gateway.context import current_user_scopes
-from app.gateway.event_store import InMemoryEventStore
-from app.gateway.tools.drive_tools import DRIVE_REGISTRY, DRIVE_REQUIRED_SCOPE, DRIVE_TOOLS
-from app.gateway.tools.job_tools import JOB_REGISTRY, JOB_REQUIRED_SCOPE, JOB_TOOLS
-from app.gateway.tools.slack_tools import SLACK_REGISTRY, SLACK_REQUIRED_SCOPE, SLACK_TOOLS
+from app.integrations.google.job_tools import JOB_REGISTRY, JOB_REQUIRED_SCOPE, JOB_TOOLS
+from app.integrations.google.tools import DRIVE_REGISTRY, DRIVE_REQUIRED_SCOPE, DRIVE_TOOLS
+from app.integrations.slack.tools import SLACK_REGISTRY, SLACK_REQUIRED_SCOPE, SLACK_TOOLS
+from app.mcp.event_store import InMemoryEventStore
+from app.shared.context import current_user_scopes
 
 logger = logging.getLogger(__name__)
 

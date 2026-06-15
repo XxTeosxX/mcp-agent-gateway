@@ -2,8 +2,8 @@ import pytest
 from fakeredis.aioredis import FakeRedis
 from mcp import types
 
-from app.gateway.context import current_user_id
-from app.gateway.usage import (
+from app.shared.context import current_user_id
+from app.shared.usage import (
     count_tokens,
     record_usage,
     track_usage,

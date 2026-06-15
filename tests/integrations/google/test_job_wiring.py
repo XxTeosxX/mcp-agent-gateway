@@ -1,5 +1,5 @@
-from app.gateway.context import current_user_scopes
-from app.gateway.server import handle_list_tools
+from app.mcp.server import handle_list_tools
+from app.shared.context import current_user_scopes
 
 
 async def test_job_tools_are_listed():
@@ -12,6 +12,6 @@ async def test_job_tools_are_listed():
 
 
 async def test_job_handlers_in_session_registry():
-    from app.gateway.server import _REGISTRY
+    from app.mcp.server import _REGISTRY
 
     assert {"drive-export-large-file", "wait-for-job"} <= set(_REGISTRY)

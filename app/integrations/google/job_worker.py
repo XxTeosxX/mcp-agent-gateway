@@ -6,16 +6,15 @@ import time
 from pathlib import Path
 
 from app.config import settings
-from app.gateway.jobs import (
+from app.integrations.google.drive_client import drive_client as _drive_client
+from app.integrations.google.jobs import (
     EXPORT_FORMATS,
     GROUP,
     JOBS_STREAM,
     RESULT_TTL_SECONDS,
     ensure_group,
 )
-from app.integrations.google.drive_client import drive_client as _drive_client
-from app.integrations.google.token_store import get_valid_google_token
-from app.shared.store import token_store
+from app.integrations.google.token_store import get_valid_google_token, token_store
 
 logger = logging.getLogger("app.jobs")
 

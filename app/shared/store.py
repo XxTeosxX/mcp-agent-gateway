@@ -72,10 +72,5 @@ class StoreHolder:
 
     def get(self) -> Store:
         if self._store is None:
-            raise RuntimeError("token_store not initialized — call init() in mcp_lifespan")
+            raise RuntimeError("store not initialized — call init() in mcp_lifespan")
         return self._store
-
-
-token_store = StoreHolder()
-
-slack_token_store = StoreHolder()

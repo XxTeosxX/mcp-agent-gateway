@@ -486,15 +486,18 @@
       "groups": []
     },
     {
-      "id": "4800361d-f6cb-5ade-b732-48809fb1700f",
-      "username": "joao",
+      "id": "3910f0aa-d5db-52ef-8f94-edf5bbdba7b9",
+      "username": "june",
       "enabled": true,
       "emailVerified": true,
-      "email": "joao@example.com",
+      "email": "june@example.com",
+      "firstName": "June",
+      "lastName": "Test",
+      "requiredActions": [],
       "credentials": [
         {
           "type": "password",
-          "value": "joao-pass",
+          "value": "june-pass",
           "temporary": false
         }
       ],
@@ -508,15 +511,18 @@
       }
     },
     {
-      "id": "5e31ab36-2dd2-5ab2-91b6-4e50064f5750",
-      "username": "maria",
+      "id": "1849743f-07b1-5b4a-b6cd-7d3c0c21e1a4",
+      "username": "rayray",
       "enabled": true,
       "emailVerified": true,
-      "email": "maria@example.com",
+      "email": "rayray@example.com",
+      "firstName": "Rayray",
+      "lastName": "Test",
+      "requiredActions": [],
       "credentials": [
         {
           "type": "password",
-          "value": "maria-pass",
+          "value": "rayray-pass",
           "temporary": false
         }
       ],
@@ -531,15 +537,18 @@
       }
     },
     {
-      "id": "f272c529-d2e0-554f-be9b-639af4aa0d93",
-      "username": "roger",
+      "id": "b6458f49-431b-598c-ab52-ae6425d778bb",
+      "username": "jasmine",
       "enabled": true,
       "emailVerified": true,
-      "email": "roger@example.com",
+      "email": "jasmine@example.com",
+      "firstName": "Jasmine",
+      "lastName": "Test",
+      "requiredActions": [],
       "credentials": [
         {
           "type": "password",
-          "value": "roger-pass",
+          "value": "jasmine-pass",
           "temporary": false
         }
       ],
@@ -2604,5 +2613,6 @@
   },
   "clientPolicies": {
     "policies": []
-  }
+  },
+  "passwordPolicy": "hashAlgorithm(pbkdf2-sha256)"
 }

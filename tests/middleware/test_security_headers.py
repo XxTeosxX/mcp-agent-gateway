@@ -2,7 +2,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.gateway.middleware.security_headers import SecurityHeadersMiddleware
+from app.middleware.security_headers import SecurityHeadersMiddleware
 
 
 def _make_app() -> FastAPI:

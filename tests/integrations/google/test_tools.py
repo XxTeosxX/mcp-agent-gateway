@@ -7,10 +7,11 @@ import respx
 from cryptography.fernet import Fernet
 
 from app.config import settings
-from app.gateway.context import current_user_id
-from app.gateway.tools import drive_tools
+from app.integrations.google import tools as drive_tools
 from app.integrations.google.drive_client import drive_client
-from app.shared.store import InMemoryStore, token_store
+from app.integrations.google.token_store import token_store
+from app.shared.context import current_user_id
+from app.shared.store import InMemoryStore
 
 
 @pytest.fixture(autouse=True)
