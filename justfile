@@ -107,8 +107,8 @@ health:
     #!/usr/bin/env bash
     set -euo pipefail
     echo "Checking service health..."
-    echo -n "Redis: "
-    if docker compose -f docker-compose.local.yml exec -T redis redis-cli ping | grep -q PONG; then
+    echo -n "Valkey: "
+    if docker compose -f docker-compose.local.yml exec -T valkey valkey-cli ping | grep -q PONG; then
         echo "✓ OK"
     else
         echo "✗ FAILED"

@@ -1,11 +1,12 @@
 # MCP Agent Gateway
 
-> A secure, production-grade gateway that gives AI agents **audited, least-privilege access** to Google Drive and Slack over the Model Context Protocol — without ever leaking the user's identity token to a third party.
+> A secure, production-minded gateway that gives AI agents **audited, least-privilege access** to Google Drive and Slack over the Model Context Protocol — without ever leaking the user's identity token to a third party.
 
 <p align="center">
-  <img alt="tests" src="https://img.shields.io/badge/tests-230_passing-2ea44f">
+  <a href="https://github.com/xxteosxx/mcp-agent-gateway/actions/workflows/ci.yml">
+    <img alt="CI" src="https://github.com/xxteosxx/mcp-agent-gateway/actions/workflows/ci.yml/badge.svg">
+  </a>
   <img alt="coverage" src="https://img.shields.io/badge/coverage-93%25-2ea44f">
-  <img alt="dependency CVEs" src="https://img.shields.io/badge/CVEs-0-2ea44f">
   <img alt="bandit" src="https://img.shields.io/badge/bandit-0_high-2ea44f">
   <img alt="confused deputy" src="https://img.shields.io/badge/Confused_Deputy-proven-2ea44f">
 </p>
@@ -28,13 +29,15 @@ user's bearer token straight to the upstream API — is a textbook **Confused De
 vulnerability**: the upstream can't tell whether the agent was actually authorized to act,
 and a single stolen token unlocks everything.
 
-This gateway refuses to do that. It runs **two independent OAuth 2.1 trust boundaries**:
+This gateway refuses to do that. It runs **two independent OAuth trust boundaries**:
 
 ```
  Agent ──Bearer JWT──▶  GATEWAY  ──per-service OAuth token──▶  Google / Slack
         (downstream)      │                  (upstream)
                           └── the downstream JWT is NEVER forwarded upstream
 ```
+
+The downstream client-to-gateway flow is OAuth 2.1: authorization code with PKCE for users, or client credentials for service accounts; upstream tokens are isolated per-provider OAuth 2.0 tokens.
 
 The separation is **proven by a regression test** (`test_confused_deputy`) that asserts the
 downstream JWT never appears in any upstream request — so the guarantee can't silently rot.
@@ -48,11 +51,11 @@ downstream JWT never appears in any upstream request — so the guarantee can't 
 | 🛡️ **Confused Deputy prevention** | Dual OAuth flows, per-integration token mint | Most gateways forward the caller's token by default |
 | 🔑 **Standards-based auth** | OAuth 2.1 + RFC 9728 PRM + RFC 7591 Dynamic Client Registration | Any compliant MCP client connects with zero custom glue |
 | 🔒 **Tokens encrypted at rest** | Fernet (authenticated encryption), one key per provider | Redis compromise ≠ credential compromise |
-| ⏱️ **Atomic rate limiting** | Sliding window in a single Redis **Lua** script | Naïve counters race under concurrency |
+| ⏱️ **Atomic rate limiting** | Fixed-window counter in a single Redis **Lua** script (`INCR` + `PEXPIRE`) | Naïve counters race under concurrency |
 | 📈 **Usage metering** | `tiktoken` token counting → Redis Streams + admin API | Per-user cost/visibility without log scraping |
 | ⚙️ **Async job queue** | Redis Streams consumer groups + ownership guard | Large Drive exports outlive a single request |
 | 📨 **Signed webhooks** | Slack HMAC v0 + timestamp freshness + replay guard + idempotency | Webhooks are a classic spoofing/replay vector |
-| 🔭 **Distributed tracing** | OpenTelemetry zero-code auto-instrumentation (FastAPI + httpx), OTLP export, trace-id stamped on every log line | Correlating a request across middleware, MCP, and upstream calls is otherwise guesswork |
+| 🔭 **Distributed tracing** | OpenTelemetry zero-code auto-instrumentation (FastAPI + httpx), OTLP export, trace-id stamped on the request log event | Correlating a request across middleware, MCP, and upstream calls is otherwise guesswork |
 | 🧱 **Clean DDD architecture** | Bounded contexts: `identity` · `integrations` · `mcp` · `middleware` · `shared` | New integration = one folder, one contract |
 
 ---
@@ -96,9 +99,10 @@ graph TB
     class G,H up;
 ```
 
-**Request path:** `AccessGuard` (Bearer → validate → `request.state.user`; bypasses `/health`
-and `/.well-known/*`) → `request_logger` → MCP app at `/mcp/`. Middleware wraps the MCP route
-itself, so the protocol traffic is authenticated like everything else.
+**Request path:** `AccessGuard` (Bearer → validate → `request.state.user`; bypasses public/meta
+paths such as `/health`, `/.well-known/*`, `/docs`, `/openapi.json`, `/oauth/authorize`, and
+`/webhooks/*`) → `request_logger` → MCP app at `/mcp/`. Middleware wraps the MCP route itself,
+so the protocol traffic is authenticated like everything else.
 
 **Project layout** (source under `app/`):
 
@@ -167,6 +171,17 @@ app/
 | `slack-send-message` | Post a message to a channel |
 | `slack-search-messages` | Search message history |
 
+> [!NOTE]
+> **Planned improvement — structured Slack search (parity with Drive).** Today
+> `slack-search-messages` takes a single `query` string in **Slack's own search syntax**
+> (`deploy in:#ops`, `from:@user`), so the agent has to know the upstream DSL. `drive-search-files`
+> already solves this the right way: the caller passes **structured, validated filters**
+> (`name_contains`, `full_text`, `mime_type`, `in_folder`, `modified_after`) and the gateway
+> builds the escaped Drive `q` **server-side** — no API query language leaks to the agent, and
+> injection is impossible by construction. The next step is to give Slack search the same
+> structured input (`from`, `in_channel`, `before`/`after`) and compose the Slack query
+> internally, so every search tool speaks structured input, not a vendor DSL.
+
 ### Jobs
 | Tool | Does |
 |---|---|
@@ -203,9 +218,9 @@ Inbound: `POST /webhooks/slack` — HMAC-verified, replay-guarded, idempotent fa
 > Both are Fernet-encrypted at rest, so `SLACK_TOKEN_ENCRYPTION_KEY` must be set
 > whenever a shared token is provisioned.
 >
-> The per-user 3-legged OAuth flow (`/auth/slack/initiate` → callback) stays the
-> right choice only when a tool must act **as a specific user** (`xoxp-` user
-> token) rather than as the bot.
+> The current implementation uses shared workspace tokens (bot + user). A per-user
+> 3-legged OAuth flow is not exposed today; if a tool must act as a specific user,
+> provision that user's `xoxp-` token via `SLACK_SHARED_USER_TOKEN`.
 
 ---
 
@@ -215,15 +230,15 @@ Audited (latest run, this codebase):
 
 - **`pip-audit`** → 0 known dependency vulnerabilities
 - **`bandit`** static analysis → **0 findings** (the few B105 false positives on OAuth URL / token-key constants are suppressed with documented `# nosec` lines)
-- A **dedicated security suite** (in the 230-test run) — the Confused Deputy proof, `verify=True` (TLS) assertions on every outbound HTTP client, log-masking, security headers, and the DNS-rebinding origin guard
+- A **dedicated security suite** (in the 257-test run) — the Confused Deputy proof, `verify=True` (TLS) assertions on every outbound HTTP client, log-masking, security headers, and the strict origin allowlist
 
 Built-in defenses:
 
 - **OAuth 2.1 + RFC 9728** protected-resource discovery; **RS256** JWT validation with JWKS TTL cache
-- **Dynamic Client Registration (RFC 7591)** for hands-off client onboarding
+- **Dynamic Client Registration (RFC 7591)**, triggered on demand inside `/oauth/authorize` when `client_id` is a metadata URL
 - **Fernet** token encryption at rest, per-provider keys
-- **OriginGuard** (DNS-rebinding defense on `/mcp`), **SecurityHeaders** (HSTS, nosniff), restricted **CORS**
-- **SensitiveDataFilter** masks tokens in structured logs; **OpenTelemetry** traces (FastAPI + httpx auto-instrumented, OTLP) correlate every log line by trace-id
+- **OriginGuard** (strict origin allowlist on `/mcp`), **SecurityHeaders** (HSTS, nosniff), restricted **CORS**
+- **SensitiveDataFilter** masks tokens in structured logs; **OpenTelemetry** traces (FastAPI + httpx auto-instrumented, OTLP) stamp the request log event with trace-id (broader log correlation is on the roadmap below)
 - CI runs `ruff`, `pytest`, `bandit` + `pip-audit` on every pull request
 
 ---
@@ -239,9 +254,13 @@ just dev         # uvicorn --reload
 Gateway → http://localhost:8000 · MCP → http://localhost:8000/mcp/ · Keycloak → http://localhost:8080
 
 ```bash
-# get a token, then call a tool
-TOKEN=$(curl -s -X POST http://localhost:8080/realms/master/protocol/openid-connect/token \
-  -d grant_type=password -d client_id=admin-cli -d username=admin -d password=admin | jq -r .access_token)
+# Obtain an access token from your IdP using authorization_code + PKCE.
+# The gateway's /oauth/authorize endpoint enforces PKCE and state.
+# For a local smoke test you can use client_credentials instead:
+TOKEN=$(curl -s -X POST http://localhost:8080/realms/mcp-gateway/protocol/openid-connect/token \
+  -d grant_type=client_credentials \
+  -d client_id=mcp-test \
+  -d client_secret=local-dev-only-not-secret | jq -r .access_token)
 
 curl -X POST http://localhost:8000/mcp/ \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
@@ -249,35 +268,39 @@ curl -X POST http://localhost:8000/mcp/ \
        "params":{"name":"drive-search-files","arguments":{"full_text":"contract","max_results":10}}}'
 ```
 
+If you obtain tokens through the gateway's `/oauth/authorize` endpoint, the following constraints apply:
+
+> **OAuth 2.1 constraints.** The gateway's `/oauth/authorize` requires
+> `code_challenge`/`code_challenge_method=S256` (PKCE), a `state` parameter, and a
+> `redirect_uri`. For dynamically registered clients (`client_id` is a metadata URL)
+> the redirect URI is validated against the metadata; pre-registered clients are
+> validated by the upstream identity provider. Implicit and password grants are not
+> supported.
+
 ### Smoke test the whole MCP flow (`test-api.sh`)
 
-`test-api.sh` (at the repo root) drives the full Streamable-HTTP handshake against a
+`app/test-api.sh` (at the `app/` submodule root) drives the full Streamable-HTTP handshake against a
 running stack — health → `initialize` → `notifications/initialized` → `tools/list` →
 `drive-list-recent` + `drive-search-files` calls → `prompts/list` → `prompts/get
-drive-find-document`. It fetches its own Bearer token; pick one of three credential modes:
+drive-find-document`. It fetches its own Bearer token; pick one of two credential modes:
 
 ```bash
-# Run from the repo root. Use bash (the script needs arrays/herestrings + `set -euo pipefail`).
-MCP_USER=rayray bash test-api.sh   # password grant — full scope (drive + slack)
-MCP_USER=june   bash test-api.sh   # password grant — drive only
+# Run from the app/ submodule root. Use bash (the script needs arrays/herestrings + `set -euo pipefail`).
 CLIENT_ID=mcp-test CLIENT_SECRET=local-dev-only-not-secret bash test-api.sh  # client_credentials
 TOKEN=eyJ...    bash test-api.sh   # bring your own JWT
 ```
 
-> Use `MCP_USER`, **not** `USERNAME` — most hosts already export `USERNAME` (your OS login),
-> which would silently shadow the value you pass.
-
 | Mode | Env vars | Token carries | What you exercise |
 |---|---|---|---|
-| User (password grant) | `MCP_USER=` (`MCP_PASSWORD` defaults to `<user>-pass`) | that user's roles | tools/prompts the user's scope grants |
 | Service account | `CLIENT_ID=mcp-test CLIENT_SECRET=…` | **no** drive/slack roles | auth + routing only — tool/prompt lists come back **empty** |
 | Bring your own | `TOKEN=…` | whatever you minted | — |
 
 Notes:
 
-- The password-grant mode uses the confidential **`mcp-gateway`** client (`USER_CLIENT_ID` /
-  `USER_CLIENT_SECRET`, default secret `mcp-gateway-secret`), which stamps the required
-  `aud` and the user's roles into the token.
+- The `client_credentials` mode uses the **`mcp-test`** client (default secret `local-dev-only-not-secret`).
+- The password grant has been removed because OAuth 2.1 no longer allows it. To test with a
+  user-scoped token, obtain one from your IdP's authorization-code flow with PKCE and pass
+  it via `TOKEN=...`.
 - On the **host**, the issuer is `localhost:8080` (the stack pins `KC_HOSTNAME`); the script
   defaults to it. Override with `OAUTH_ISSUER_URL=` only if your gateway expects a different one.
 - The Drive tool calls (steps 5–6) hit real Google Drive and need `GOOGLE_SHARED_REFRESH_TOKEN`
@@ -285,26 +308,76 @@ Notes:
 
 ### Seed users & access (local RBAC)
 
-The local Keycloak realm (`mcp-gateway`) is seeded with three test users. Access to
-each integration's MCP tools is gated by a per-client role — `drive-user` unlocks the
+The local Keycloak realm (`mcp-gateway`) is seeded with three test users; passwords
+and roles are defined in `compose/local/keycloak/realm.json`. Access to each
+integration's MCP tools is gated by a per-client role — `drive-user` unlocks the
 Drive tools, `slack-user` unlocks the Slack tools. A user only sees the tools their
 roles grant.
 
-| User | Password | Roles | Drive tools | Slack tools |
-|---|---|---|---|---|
-| `june` | `june-pass` | `drive-user` | ✅ | ❌ |
-| `rayray` | `rayray-pass` | `drive-user`, `slack-user` | ✅ | ✅ |
-| `jasmine` | `jasmine-pass` | `slack-user` | ❌ | ✅ |
+| User | Roles | Drive tools | Slack tools |
+|---|---|---|---|
+| `june` | `drive-user` | ✅ | ❌ |
+| `rayray` | `drive-user`, `slack-user` | ✅ | ✅ |
+| `jasmine` | `slack-user` | ❌ | ✅ |
 
 ```bash
-# log in as a seed user (mcp-gateway realm) and call a tool with that user's scope
+# User-scoped tokens must be obtained via authorization_code + PKCE (browser flow).
+# For a non-interactive smoke test, use client_credentials instead:
 TOKEN=$(curl -s -X POST http://localhost:8080/realms/mcp-gateway/protocol/openid-connect/token \
-  -d grant_type=password -d client_id=mcp-gateway \
-  -d username=rayray -d password=rayray-pass | jq -r .access_token)
+  -d grant_type=client_credentials \
+  -d client_id=mcp-test \
+  -d client_secret=local-dev-only-not-secret | jq -r .access_token)
 ```
 
 > Seeded from `compose/local/keycloak/realm.json` (and `seed_rbac.py`). Edit those to
 > change the roster, then re-run `just docker-up`.
+
+---
+
+## Required configuration
+
+Copy `.env.example` to `.env` and fill at least the values marked **required**. The
+application aborts startup if `REDIS_URL` is missing.
+
+| Variable | Required | Purpose |
+|---|---|---|
+| `REDIS_URL` | **yes** | Redis/Valkey connection string (e.g. `redis://localhost:6379`) |
+| `OAUTH_ISSUER_URL` | **yes** | OpenID issuer that signs the downstream JWTs |
+| `OAUTH_EXPECTED_AUDIENCE` | **yes** | Audience the gateway expects in the JWT (default matches local Keycloak) |
+| `GOOGLE_TOKEN_ENCRYPTION_KEY` | when Drive enabled | Fernet key for the shared Google refresh token |
+| `GOOGLE_CLIENT_ID` | when Drive enabled | OAuth client ID used to refresh the shared token |
+| `GOOGLE_CLIENT_SECRET` | when Drive enabled | OAuth client secret used to refresh the shared token |
+| `GOOGLE_SHARED_REFRESH_TOKEN` | when Drive enabled | Refresh token from `gcloud` (see Drive provisioning above) |
+| `SLACK_TOKEN_ENCRYPTION_KEY` | when Slack enabled | Fernet key for shared Slack tokens |
+| `SLACK_SHARED_BOT_TOKEN` | when Slack enabled | `xoxb-` token for `slack-send-message` |
+| `SLACK_SHARED_USER_TOKEN` | for Slack search | `xoxp-` token for `slack-search-messages` |
+| `SLACK_SIGNING_SECRET` | for webhooks | Verifies inbound Slack webhook HMAC |
+
+---
+
+## Production
+
+For production deployments use `docker-compose.production.yml`. It differs from the local
+stack in a few important ways:
+
+- No `env_file` — every setting is injected through the environment.
+- Required variables abort startup if unset (`${VAR:?...}`).
+- Valkey persists data to a Docker volume (`valkey_data`).
+- Async job exports are persisted to `/data/exports` (`exports_data`).
+- OpenTelemetry is enabled through the `/start` script.
+
+```bash
+# example — set the required variables first
+export OAUTH_ISSUER_URL=https://auth.example.com/realms/mcp-gateway
+export OAUTH_EXPECTED_AUDIENCE=https://gateway.example.com/mcp/
+export GATEWAY_BASE_URL=https://gateway.example.com
+export OTEL_EXPORTER_OTLP_ENDPOINT=https://otel.example.com:4318
+export REDIS_URL=redis://valkey:6379
+
+docker compose -f docker-compose.production.yml up -d
+```
+
+See `.env.example` for the full list of tunables.
 
 ---
 
@@ -334,14 +407,14 @@ HubSpot is the next planned provider.
 | Auth | **OAuth 2.1 + RFC 9728**, not API keys | Interoperable, replay-resistant, audited spec |
 | Trust model | **Two separate OAuth flows** | Confused-Deputy prevention + scope isolation |
 | Token storage | **Fernet** authenticated encryption | Defense in depth; tamper-evident |
-| Rate limiting | **Sliding window** in Lua | Fair across window boundaries, race-free |
+| Rate limiting | **Fixed-window counter** in Lua | Atomic (`INCR`+`PEXPIRE`), race-free under concurrency |
 | Usage tracking | **Redis Streams** | Real-time queryable, consumer groups, retention |
 
 ---
 
 ## Quality
 
-- **230 tests** passing · **93%** coverage (`respx`-mocked HTTP, security regression suite) — see [`COVERAGE.md`](COVERAGE.md)
+- **257 tests** passing · **93%** coverage (`respx`-mocked HTTP, security regression suite) — see [`COVERAGE.md`](COVERAGE.md)
 - **Ruff** lint + format clean (`E,F,I,N,W,UP`, line-length 120)
 - Python **3.13**, `uv` package manager
 - `just ci` runs lint + tests + coverage locally; `just security` runs the scanners

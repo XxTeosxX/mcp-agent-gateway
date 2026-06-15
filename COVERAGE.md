@@ -1,6 +1,6 @@
 # Test coverage
 
-**230 tests passing · 93% line coverage** (1290 statements, 86 uncovered).
+**238 tests passing · 93% line coverage** (1309 statements, 89 uncovered).
 
 Reproduce locally:
 
@@ -18,9 +18,9 @@ no credentials, and no running stack are required.
 |---|---:|---:|---:|
 | `api/usage_router.py` | 28 | 0 | 100% |
 | `api/webhooks_router.py` | 39 | 3 | 92% |
-| `authorization/router.py` | 49 | 0 | 100% |
+| `authorization/router.py` | 48 | 0 | 100% |
 | `config.py` | 42 | 0 | 100% |
-| `identity/client_registration/models.py` | 52 | 7 | 87% |
+| `identity/client_registration/models.py` | 72 | 10 | 86% |
 | `identity/client_registration/registrar.py` | 24 | 4 | 83% |
 | `identity/client_registration/repository.py` | 12 | 0 | 100% |
 | `identity/jwks_client.py` | 8 | 1 | 88% |
@@ -57,7 +57,7 @@ no credentials, and no running stack are required.
 | `shared/redis.py` | 5 | 0 | 100% |
 | `shared/store.py` | 44 | 3 | 93% |
 | `shared/usage.py` | 37 | 0 | 100% |
-| **TOTAL** | **1290** | **86** | **93%** |
+| **TOTAL** | **1309** | **89** | **93%** |
 
 ## Notable gaps
 
